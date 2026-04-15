@@ -1,0 +1,850 @@
+#!/usr/bin/env python3
+import json
+import os
+import re
+import sys
+import sqlite3
+import datetime
+import shutil
+import urllib.request
+import urllib.error
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+DATA_FILE = None
+CONFIG_FILE = None
+DB_FILE = None
+HF_TOKEN = None
+SERVER_PORT = 5000
+HF_MODEL = None
+LENGTH_RATIO_MIN = 0.3
+LENGTH_RATIO_MAX = 2.5
+CHECK_RULES = {}
+AVAILABLE_MODELS = []
+TRANSLATION_APIS = {}
+DEFAULT_API = "doubao"
+TRANSLATION_APIS = {}
+
+issues_list = []
+all_items = []
+
+def load_config():
+    global DATA_FILE, CONFIG_FILE, HF_TOKEN, SERVER_PORT, HF_MODEL
+    global LENGTH_RATIO_MIN, LENGTH_RATIO_MAX, CHECK_RULES, AVAILABLE_MODELS, DB_FILE
+    global TRANSLATION_APIS, DEFAULT_API
+    
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(script_dir, "config.json")
+    db_path = os.path.join(script_dir, "translation_status.db")
+    try:
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+                DATA_FILE = config.get("data_file", "/home/edo/translation/table.json")
+                CONFIG_FILE = config.get("config_file", config_path)
+                HF_TOKEN = config.get("hf_token", "")
+                SERVER_PORT = config.get("port", 5000)
+                HF_MODEL = config.get("hf_model", "")
+                LENGTH_RATIO_MIN = config.get("length_ratio_min", 0.3)
+                LENGTH_RATIO_MAX = config.get("length_ratio_max", 2.5)
+                CHECK_RULES = config.get("check_rules", {})
+                AVAILABLE_MODELS = config.get("available_models", [])
+                TRANSLATION_APIS = config.get("translation_apis", {})
+                DEFAULT_API = config.get("default_api", "mymemory")
+        DB_FILE = db_path
+    except Exception as e:
+        print(f"配置加载失败: {e}")
+        DATA_FILE = "/home/edo/translation/table.json"
+        CONFIG_FILE = config_path
+        DB_FILE = db_path
+        HF_TOKEN = ""
+        SERVER_PORT = 5000
+        DEFAULT_API = "doubao"
+        TRANSLATION_APIS = {
+            "doubao": {"name": "豆包AI (免费)", "url": "", "method": "POST", "session": "", "type": "openai"}
+        }
+        LENGTH_RATIO_MIN = 0.3
+        LENGTH_RATIO_MAX = 2.5
+
+load_config()
+init_db()
+load_doubao_config()
+
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS translation_status (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_key TEXT NOT NULL,
+            index_id INTEGER NOT NULL,
+            jp TEXT,
+            cn TEXT,
+            is_translated INTEGER DEFAULT 0,
+            is_fixed INTEGER DEFAULT 0,
+            issue_type TEXT,
+            ai_suggestion TEXT,
+            created_at TEXT,
+            updated_at TEXT,
+            UNIQUE(file_key, index_id)
+        )
+    ''')
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS doubao_config (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            api_url TEXT,
+            session_id TEXT,
+            updated_at TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def load_doubao_config():
+    global TRANSLATION_APIS
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute("SELECT api_url, session_id FROM doubao_config WHERE id = 1")
+    row = cur.fetchone()
+    conn.close()
+    if row:
+        api_url, session_id = row
+        if "doubao" not in TRANSLATION_APIS:
+            TRANSLATION_APIS["doubao"] = {"name": "豆包AI (免费)", "method": "POST", "type": "openai"}
+        TRANSLATION_APIS["doubao"]["url"] = api_url or ""
+        TRANSLATION_APIS["doubao"]["session"] = session_id or ""
+
+def save_doubao_config(api_url, session_id):
+    conn = sqlite3.connect(DB_FILE)
+    now = datetime.datetime.now().isoformat()
+    conn.execute('''
+        INSERT OR REPLACE INTO doubao_config (id, api_url, session_id, updated_at)
+        VALUES (1, ?, ?, ?)
+    ''', (api_url, session_id, now))
+    conn.commit()
+    conn.close()
+    global TRANSLATION_APIS
+    TRANSLATION_APIS["doubao"]["url"] = api_url
+    TRANSLATION_APIS["doubao"]["session"] = session_id
+
+def get_db_stats():
+    if not os.path.exists(DB_FILE):
+        return {"exists": False, "total": 0, "translated": 0, "fixed": 0}
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM translation_status")
+    total = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM translation_status WHERE is_translated=1")
+    translated = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM translation_status WHERE is_fixed=1")
+    fixed = cur.fetchone()[0]
+    conn.close()
+    return {"exists": True, "total": total, "translated": translated, "fixed": fixed}
+
+def sync_db():
+    init_db()
+    data = load_data()
+    now = datetime.datetime.now().isoformat()
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("PRAGMA journal_mode=WAL")
+    cur = conn.cursor()
+    
+    inserted = 0
+    updated = 0
+    
+    for file_key, items in data.items():
+        if not isinstance(items, list):
+            continue
+        for idx, item in enumerate(items):
+            jp = item.get("jp", "")
+            cn = item.get("cn", "")
+            is_translated = 1 if cn and cn.strip() else 0
+            issue = check_single_issue_type(item)
+            
+            cur.execute("SELECT is_fixed FROM translation_status WHERE file_key=? AND index_id=?", (file_key, idx))
+            row = cur.fetchone()
+            was_fixed = row[0] if row else 0
+            is_fixed = was_fixed
+            if issue and was_fixed == 0:
+                is_fixed = 0
+            elif not issue:
+                is_fixed = 1
+            
+            if row:
+                cur.execute('''UPDATE translation_status SET cn=?, is_translated=?, is_fixed=?, issue_type=? WHERE file_key=? AND index_id=?''',
+                          (cn, is_translated, is_fixed, issue, file_key, idx))
+                updated += 1
+            else:
+                cur.execute('''INSERT INTO translation_status (file_key, index_id, jp, cn, is_translated, is_fixed, issue_type, created_at, updated_at)
+                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                          (file_key, idx, jp, cn, is_translated, is_fixed, issue, now, now))
+                inserted += 1
+    
+    conn.commit()
+    conn.close()
+    return {"inserted": inserted, "updated": updated}
+
+def backup_db():
+    if not os.path.exists(DB_FILE):
+        return {"error": "数据库不存在"}
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = os.path.join(script_dir, f"translation_status_backup_{now}.db")
+    shutil.copy2(DB_FILE, backup_path)
+    return {"success": True, "path": backup_path}
+
+def load_all_data():
+    global all_items
+    all_items = []
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
+        for file_key, items in data.items():
+            if isinstance(items, list):
+                for idx, item in enumerate(items):
+                    all_items.append({"file": file_key, "index": idx, "item": item})
+    return all_items
+
+load_all_data()
+
+def load_data():
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_data(data):
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def count_cn(text):
+    return len(re.sub(r'[\s\W]', '', text))
+
+def check_single_issue_type(item):
+    jp = item.get("jp", "")
+    cn = item.get("cn", "")
+    issues = []
+    
+    if not cn or cn.strip() == "":
+        issues.append("cn_empty")
+    if "「" in cn or "」" in cn or "……" in cn or "..." in cn:
+        issues.append("placeholder")
+    if re.search(r'\[NUM\]|\{n\}|\d+\}', cn):
+        issues.append("digit_placeholder")
+    if cn == jp and cn:
+        issues.append("same_content")
+    if re.search(r'这个|那个|什么|怎么|为什么|如何', cn) and count_cn(cn) < 5:
+        issues.append("low_quality")
+    jp_len, cn_len = count_cn(jp), count_cn(cn)
+    if jp_len > 0 and (cn_len < jp_len * LENGTH_RATIO_MIN or cn_len > jp_len * LENGTH_RATIO_MAX):
+        issues.append("length_abnormal")
+    
+    return ",".join(issues) if issues else ""
+
+def find_issues(check_rules):
+    global all_items
+    if not all_items:
+        load_all_data()
+    results = []
+    
+    # 如果没有勾选任何规则，返回所有条目
+    if not check_rules:
+        for entry in all_items:
+            results.append({
+                "file": entry["file"],
+                "index": entry["index"],
+                "item": entry["item"],
+                "issues": []
+            })
+        return results
+    
+    # 有规则时，只返回匹配规则的条目
+    for entry in all_items:
+        item = entry["item"]
+        file_key = entry["file"]
+        idx = entry["index"]
+        issues = []
+        for rule in check_rules:
+            if rule in ["cn_empty", "placeholder", "digit_placeholder", "same_content", "low_quality", "length_abnormal"]:
+                if check_single_issue(item, rule):
+                    issues.append(rule)
+        if issues:
+            results.append({"file": file_key, "index": idx, "item": item, "issues": issues})
+    return results
+
+def check_single_issue(item, issue_type):
+    jp = item.get("jp", "")
+    cn = item.get("cn", "")
+    
+    if issue_type == "cn_empty":
+        return not cn or cn.strip() == ""
+    if issue_type == "placeholder":
+        return "「" in cn or "」" in cn or "……" in cn or "..." in cn
+    if issue_type == "digit_placeholder":
+        return bool(re.search(r'\[NUM\]|\{n\}|\d+\}', cn))
+    if issue_type == "same_content":
+        return cn == jp
+    if issue_type == "low_quality":
+        return bool(re.search(r'这个|那个|什么|怎么|为什么|如何', cn)) and count_cn(cn) < 5
+    if issue_type == "length_abnormal":
+        jp_len, cn_len = count_cn(jp), count_cn(cn)
+        if jp_len > 0:
+            return cn_len < jp_len * LENGTH_RATIO_MIN or cn_len > jp_len * LENGTH_RATIO_MAX
+    return False
+
+def translate_with_api(text, api_name=None):
+    if not text:
+        return None
+    
+    import urllib.parse
+    
+    api_key = api_name or DEFAULT_API
+    if api_key not in TRANSLATION_APIS:
+        return "未找到翻译引擎"
+    
+    try:
+        api_config = TRANSLATION_APIS.get(api_key, {})
+        url = api_config.get("url", "")
+        session = api_config.get("session", "")
+        
+        if api_key == "doubao":
+            if not url:
+                return "请先在设置中填写豆包API地址"
+            if not session:
+                return "请先在设置中填写豆包SessionID"
+            
+            payload = {
+                "model": "doubao",
+                "messages": [
+                    {"role": "system", "content": "你是一个专业翻译助手，将用户输入的日文翻译成中文，只返回翻译结果，不要任何解释。"},
+                    {"role": "user", "content": text}
+                ],
+                "stream": False
+            }
+            data = json.dumps(payload).encode('utf-8')
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Bearer {session}'
+                },
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                if resp.status == 200:
+                    result = json.loads(resp.read().decode('utf-8'))
+                    return result.get("choices", [{}])[0].get("message", {}).get("content", "")
+    
+    except Exception as e:
+        return f"翻译失败: {str(e)}"
+    
+    return "翻译服务暂不可用"
+
+def translate_deeplx(text):
+    return translate_with_api(text, "doubao")
+
+def translate_hf(text):
+    return translate_with_api(text, "doubao")
+
+HTML_TEMPLATE = '''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>翻译质量检查工具</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+        .container { max-width: 900px; margin: 0 auto; }
+        h1 { color: #333; }
+        .toolbar { display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap; }
+        .toolbar button, .btn { padding: 10px 20px; background: #9b59b6; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+        .toolbar button:hover, .btn:hover { opacity: 0.9; }
+        .btn-green { background: #27ae60; }
+        .btn-blue { background: #3498db; }
+        .btn-orange { background: #e67e22; }
+        .settings { background: #fff; padding: 20px; margin-bottom: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .settings h3 { margin-top: 0; }
+        .filter-group { display: flex; flex-wrap: wrap; gap: 15px; margin-bottom: 15px; }
+        .filter-group label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+        .filter-group input[type="checkbox"] { transform: scale(1.2); }
+        .config-row { display: flex; gap: 10px; margin-bottom: 15px; align-items: center; flex-wrap: wrap; }
+        .config-row select, .config-row input { padding: 8px; font-size: 14px; }
+        .config-row select { min-width: 200px; }
+        .config-row input[type="password"] { width: 200px; }
+        .db-status { background: #fff; padding: 10px 15px; margin-bottom: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .db-status .stat { display: inline-block; margin-right: 20px; }
+        .db-status .stat-num { font-weight: bold; color: #3498db; }
+        .stats { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+        .stat-box { background: #fff; padding: 15px 25px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .stat-box .num { font-size: 24px; font-weight: bold; color: #e74c3c; }
+        .stat-box .label { color: #666; font-size: 14px; }
+        .stat-box.jump-box { display: flex; align-items: center; gap: 8px; padding: 10px 15px; }
+        .stat-box.jump-box input { width: 60px; padding: 5px; font-size: 14px; }
+        .stat-box.jump-box button { padding: 5px 10px; font-size: 12px; }
+        .issue-item { background: #fff; padding: 20px; margin-bottom: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .issue-item .meta { color: #999; font-size: 12px; margin-bottom: 10px; }
+        .issue-item .jp { background: #f8f9fa; padding: 10px; border-left: 3px solid #3498db; margin-bottom: 10px; white-space: pre-wrap; }
+        .issue-item .cn { background: #f8f9fa; padding: 10px; border-left: 3px solid #27ae60; margin-bottom: 10px; white-space: pre-wrap; }
+        .issue-item .label { font-weight: bold; font-size: 12px; color: #666; }
+        .issue-item textarea { width: 100%; padding: 10px; font-size: 14px; margin-bottom: 10px; border: 1px solid #ddd; border-radius: 4px; }
+        .issue-item .ai-row { display: flex; gap: 10px; margin-bottom: 10px; }
+        .issue-item .ai-row textarea { flex: 1; margin-bottom: 0; }
+        .issue-item .btn-copy { padding: 10px 15px; background: #95a5a6; color: #fff; border: none; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+        .issue-item .btn-copy:hover { background: #7f8c8d; }
+        .issue-item .btn-row { display: flex; gap: 10px; flex-wrap: wrap; }
+        .issue-item button { padding: 10px 20px; background: #3498db; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+        .issue-item button:hover { opacity: 0.9; }
+        .issue-item .btn-save { background: #27ae60; font-weight: bold; }
+        .nav { position: fixed; bottom: 20px; right: 20px; display: flex; gap: 10px; }
+        .nav button { padding: 15px 25px; background: #2ecc71; color: #fff; border: none; border-radius: 8px; cursor: pointer; box-shadow: 0 4px 8px rgba(0,0,0,0.2); }
+        .progress { color: #666; font-size: 14px; }
+        .error { color: #e74c3c; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>翻译质量检查工具</h1>
+        
+        <div class="toolbar">
+            <button onclick="initDb()">建立数据库</button>
+            <button onclick="backupDb()">备份数据库</button>
+        </div>
+        
+        <div class="db-status" id="db-status">
+            加载中...
+        </div>
+        
+        <div class="settings">
+            <h3>过滤设置</h3>
+            <div class="filter-group">
+                <label><input type="checkbox" id="cn_empty" value="cn_empty"> cn为空</label>
+                <label><input type="checkbox" id="placeholder" value="placeholder"> 未翻译占位符</label>
+                <label><input type="checkbox" id="length_abnormal" value="length_abnormal"> 长度异常</label>
+                <label><input type="checkbox" id="same_content" value="same_content"> 相同内容</label>
+                <label><input type="checkbox" id="digit_placeholder" value="digit_placeholder"> 数字占位符</label>
+                <label><input type="checkbox" id="low_quality" value="low_quality"> 翻译质量低</label>
+            </div>
+            <div class="config-row">
+                <label>翻译源:</label>
+                <select id="api-select">
+                    <option value="">加载中...</option>
+                </select>
+                <span id="api-status" style="font-size:12px;color:#666;"></span>
+            </div>
+            <div class="config-row" id="doubao-url-row" style="display:none;">
+                <label>豆包API地址:</label>
+                <input type="text" id="doubao-url" placeholder="https://xxx.onrender.com/v1/chat/completions" style="width:350px;">
+                <button class="btn btn-small" onclick="saveDoubaoConfig()">保存</button>
+            </div>
+            <div class="config-row" id="doubao-session-row" style="display:none;">
+                <label>豆包SessionID:</label>
+                <input type="password" id="doubao-session" placeholder="从doubao.com获取" style="width:300px;">
+                <button class="btn btn-small" onclick="saveDoubaoConfig()">保存</button>
+                <a href="#" onclick="showSessionHelp(); return false;" style="font-size:12px;margin-left:10px;">如何获取？</a>
+            </div>
+            <button class="btn btn-green" onclick="applyFilter()">确认并重新检测</button>
+        </div>
+        
+        <div class="stats">
+            <div class="stat-box">
+                <div class="num" id="issue-count">-</div>
+                <div class="label">问题数</div>
+            </div>
+            <div class="stat-box">
+                <div class="num" id="total-count">-</div>
+                <div class="label">总数</div>
+            </div>
+            <div class="stat-box jump-box">
+                <input type="number" id="jump-input" placeholder="条号" min="1" onkeydown="if(event.key==='Enter')jumpToItem()">
+                <button onclick="jumpToItem()">跳转</button>
+            </div>
+        </div>
+        
+        <div id="issues-list"></div>
+    </div>
+    
+    <div class="nav">
+        <button onclick="prevItem()">← 上一条</button>
+        <button onclick="nextItem()">下一条 →</button>
+    </div>
+    
+    <script>
+        let currentIdx = 0;
+        let issues = [];
+        let allItems = [];
+        
+        async function init() {
+            await loadDbStatus();
+            await loadTranslationApis();
+            allItems = (await fetch('/api/all').then(r => r.json())).items;
+            document.getElementById('total-count').textContent = allItems.length;
+            await applyFilter();
+        }
+        
+        async function loadTranslationApis() {
+            try {
+                const resp = await fetch('/api/translation-apis');
+                const data = await resp.json();
+                const select = document.getElementById('api-select');
+                select.innerHTML = '';
+                data.apis.forEach(api => {
+                    const opt = document.createElement('option');
+                    opt.value = api.key;
+                    opt.textContent = api.name;
+                    select.appendChild(opt);
+                });
+                if (data.default) {
+                    select.value = data.default;
+                }
+                document.getElementById('api-status').textContent = '✓ 已加载';
+                await checkDoubaoConfig();
+            } catch (e) {
+                console.error('加载翻译API失败:', e);
+                document.getElementById('api-status').textContent = '✗ 加载失败';
+            }
+        }
+        
+        async function checkDoubaoConfig() {
+            const resp = await fetch('/api/doubao/status');
+            const data = await resp.json();
+            const urlRow = document.getElementById('doubao-url-row');
+            const sessionRow = document.getElementById('doubao-session-row');
+            if (data.configured) {
+                urlRow.style.display = 'none';
+                sessionRow.style.display = 'none';
+                document.getElementById('api-status').textContent = '✓ 已加载';
+            } else {
+                urlRow.style.display = 'flex';
+                sessionRow.style.display = 'flex';
+                document.getElementById('api-status').textContent = '⚠ 请配置豆包';
+            }
+        }
+        
+        async function saveDoubaoConfig() {
+            const url = document.getElementById('doubao-url').value;
+            const session = document.getElementById('doubao-session').value;
+            const resp = await fetch('/api/doubao/config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({url, session})
+            });
+            const result = await resp.json();
+            if (result.success) {
+                alert('保存成功！');
+                await checkDoubaoConfig();
+            }
+        }
+        
+        function showSessionHelp() {
+            alert('如何获取豆包SessionID:\n\n1. 访问 https://www.doubao.com 并登录账号\n2. 按 F12 打开浏览器开发者工具\n3. 切换到 Application（应用）标签\n4. 左侧 Cookies → 点击 https://www.doubao.com\n5. 找到 sessionid 字段，复制其值\n6. 粘贴到上方的输入框中\n\n提示: SessionID 可能会过期，过期后需重新获取');
+        }
+        
+        document.getElementById('api-select').addEventListener('change', function() {
+            if (this.value === 'doubao') {
+                checkDoubaoConfig();
+            }
+        });
+        
+        async function loadDbStatus() {
+            const resp = await fetch('/api/db/stats');
+            const data = await resp.json();
+            const el = document.getElementById('db-status');
+            if (data.exists) {
+                el.innerHTML = `<span class="stat">数据库: 已建立</span><span class="stat">记录数: <span class="stat-num">${data.total}</span></span><span class="stat">已翻译: <span class="stat-num">${data.translated}</span></span><span class="stat">已修复: <span class="stat-num">${data.fixed}</span></span>`;
+            } else {
+                el.innerHTML = `<span class="stat">数据库: 未建立</span>`;
+            }
+        }
+        
+        async function initDb() {
+            const btn = document.querySelector('button[onclick="initDb()"]');
+            btn.textContent = '同步中...';
+            btn.disabled = true;
+            const resp = await fetch('/api/db/init', {method: 'POST'});
+            const data = await resp.json();
+            btn.textContent = '建立数据库';
+            btn.disabled = false;
+            alert(data.inserted + '条插入, ' + data.updated + '条更新');
+            await loadDbStatus();
+        }
+        
+        async function backupDb() {
+            const resp = await fetch('/api/db/backup', {method: 'POST'});
+            const data = await resp.json();
+            if (data.success) {
+                alert('备份成功: ' + data.path);
+            } else {
+                alert('备份失败: ' + data.error);
+            }
+        }
+        
+        async function applyFilter() {
+            const selectedRules = [];
+            ['cn_empty', 'placeholder', 'length_abnormal', 'same_content', 'digit_placeholder', 'low_quality'].forEach(r => {
+                if (document.getElementById(r).checked) selectedRules.push(r);
+            });
+            
+            const apiSource = document.getElementById('api-select').value;
+            
+            const resp = await fetch('/api/filter', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({rules: selectedRules, api: apiSource})
+            });
+            const data = await resp.json();
+            issues = data.issues;
+            currentIdx = 0;
+            document.getElementById('issue-count').textContent = data.total;
+            renderItem();
+        }
+        
+        function renderItem() {
+            if (issues.length === 0) {
+                document.getElementById('issues-list').innerHTML = '<p>请勾选过滤条件或点击下方按钮查看所有</p><button class="btn btn-green" onclick="showAll()">显示全部翻译</button>';
+                return;
+            }
+            if (currentIdx >= issues.length) {
+                document.getElementById('issues-list').innerHTML = '<p>没有更多问题</p>';
+                return;
+            }
+            const issue = issues[currentIdx];
+            const item = issue.item;
+            document.getElementById('issues-list').innerHTML = `
+                <div class="issue-item">
+                    <div class="meta">文件: ${issue.file} | 索引: ${issue.index}</div>
+                    <div class="progress">进度: ${currentIdx + 1} / ${issues.length} | 问题: ${issue.issues.join(', ')}</div>
+                    <div class="label">原文 (jp):</div>
+                    <div class="jp">${item.jp || '(空)'}</div>
+                    <div class="label">当前翻译 (cn):</div>
+                    <div class="cn">${item.cn || '(空)'}</div>
+                    <div class="label">AI建议:</div>
+                    <div class="ai-row">
+                        <textarea id="ai-textarea" rows="3">${item.cn || ''}</textarea>
+                        <button class="btn-copy" onclick="copyText()" title="复制">📋复制</button>
+                    </div>
+                    <div class="btn-row">
+                        <button class="btn-save" onclick="saveAndNext()">保存→跳转</button>
+                    </div>
+                </div>
+            `;
+            loadAISuggestion(item.jp);
+        }
+        
+        function copyText() {
+            const textarea = document.getElementById('ai-textarea');
+            textarea.select();
+            document.execCommand('copy');
+            const btn = document.querySelector('.btn-copy');
+            btn.textContent = '✓已复制';
+            setTimeout(() => btn.textContent = '📋复制', 2000);
+        }
+        
+        async function loadAISuggestion(text) {
+            if (!text) return;
+            const apiSource = document.getElementById('api-select').value;
+            const resp = await fetch('/api/translate', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({text: text, api: apiSource})
+            });
+            const data = await resp.json();
+            const textarea = document.getElementById('ai-textarea');
+            if (data.translation && !data.translation.includes('错误') && !data.translation.includes('失败')) {
+                textarea.value = data.translation;
+            } else if (data.translation) {
+                textarea.value = '';
+                textarea.placeholder = data.translation;
+            }
+        }
+        
+        async function showAll() {
+            currentIdx = 0;
+            issues = allItems;
+            document.getElementById('issue-count').textContent = issues.length;
+            renderItem();
+        }
+        
+        async function saveAndReload(cn) {
+            const issue = issues[currentIdx];
+            const resp = await fetch('/api/update', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({file: issue.file, index: issue.index, cn: cn})
+            });
+            const data = await resp.json();
+            if (data.success) {
+                await loadDbStatus();
+                nextItem();
+            }
+        }
+        
+        async function saveAndNext() {
+            const cn = document.getElementById('ai-textarea').value;
+            if (cn) await saveAndReload(cn);
+        }
+        
+        async function manualSaveAndNext() {
+            const cn = document.getElementById('ai-textarea').value;
+            if (cn) await saveAndReload(cn);
+        }
+        
+        function prevItem() { if (currentIdx > 0) { currentIdx--; renderItem(); } }
+        function nextItem() { currentIdx++; renderItem(); }
+        function jumpToItem() {
+            const input = document.getElementById('jump-input');
+            const num = parseInt(input.value);
+            if (!num || num < 1) {
+                alert('请输入有效的数字');
+                return;
+            }
+            if (issues.length === 0) {
+                alert('当前没有数据，请先应用过滤');
+                return;
+            }
+            if (num > issues.length) {
+                alert('超出范围，当前只有 ' + issues.length + ' 条');
+                input.value = issues.length;
+                return;
+            }
+            currentIdx = num - 1;
+            renderItem();
+        }
+        
+        init();
+    </script>
+</body>
+</html>
+'''
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, format, *args): pass
+    
+    def send_json(self, data):
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode('utf-8'))
+    
+    def do_GET(self):
+        if self.path == '/':
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(HTML_TEMPLATE.encode('utf-8'))
+        elif self.path == '/api/all':
+            items = [{"file": e["file"], "index": e["index"], "item": e["item"], "issues": []} for e in all_items]
+            self.send_json({"total": len(items), "items": items})
+        elif self.path == '/api/models':
+            self.send_json({"models": AVAILABLE_MODELS})
+        elif self.path == '/api/translation-apis':
+            apis = [{"key": k, "name": v.get("name", k)} for k, v in TRANSLATION_APIS.items()]
+            self.send_json({"apis": apis, "default": DEFAULT_API})
+        elif self.path == '/api/db/stats':
+            self.send_json(get_db_stats())
+        else:
+            self.send_error(404)
+    
+    def do_POST(self):
+        length = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(length).decode('utf-8')
+        data = json.loads(body) if body else {}
+        
+        if self.path == '/api/db/init':
+            result = sync_db()
+            self.send_json(result)
+        
+        elif self.path == '/api/db/backup':
+            result = backup_db()
+            self.send_json(result)
+        
+        elif self.path == '/api/filter':
+            rules = data.get("rules", [])
+            api_source = data.get("api", "")
+            
+            global DEFAULT_API, issues_list, all_items
+            if api_source:
+                DEFAULT_API = api_source
+            api_source = api_source or DEFAULT_API
+            
+            # 直接重新计算而不是使用缓存
+            if rules:
+                results = []
+                for entry in all_items:
+                    item = entry["item"]
+                    file_key = entry["file"]
+                    idx = entry["index"]
+                    item_issues = []
+                    for rule in rules:
+                        if rule in ["cn_empty", "placeholder", "digit_placeholder", "same_content", "low_quality", "length_abnormal"]:
+                            if check_single_issue(item, rule):
+                                item_issues.append(rule)
+                    if item_issues:
+                        results.append({"file": file_key, "index": idx, "item": item, "issues": item_issues})
+                issues_list = results
+            else:
+                # 无规则时返回所有条目
+                issues_list = [{"file": e["file"], "index": e["index"], "item": e["item"], "issues": []} for e in all_items]
+            
+            self.send_json({"total": len(issues_list), "issues": issues_list})
+        
+        elif self.path == '/api/update':
+            full_data = load_data()
+            file_key, idx, new_cn = data.get("file"), data.get("index"), data.get("cn")
+            if file_key in full_data and idx < len(full_data[file_key]):
+                full_data[file_key][idx]["cn"] = new_cn
+                save_data(full_data)
+                
+                conn = sqlite3.connect(DB_FILE)
+                now = datetime.datetime.now().isoformat()
+                is_translated = 1 if new_cn and new_cn.strip() else 0
+                issue = check_single_issue_type(full_data[file_key][idx])
+                is_fixed = 0 if issue else 1
+                conn.execute('''INSERT OR REPLACE INTO translation_status (file_key, index_id, cn, is_translated, is_fixed, issue_type, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                          (file_key, idx, new_cn, is_translated, is_fixed, issue, now))
+                conn.commit()
+                conn.close()
+                
+                self.send_json({"success": True})
+            else:
+                self.send_json({"error": "Item not found"})
+        
+        elif self.path == '/api/translate':
+            text = data.get("text", "")
+            api = data.get("api", DEFAULT_API)
+            self.send_json({"translation": translate_with_api(text, api)})
+        
+        elif self.path == '/api/token':
+            global HF_TOKEN
+            HF_TOKEN = data.get("token", "")
+            self.send_json({"success": True})
+        
+        elif self.path == '/api/doubao/config':
+            api_url = data.get("url", "")
+            session_id = data.get("session", "")
+            save_doubao_config(api_url, session_id)
+            self.send_json({"success": True})
+        
+        elif self.path == '/api/doubao/status':
+            api_config = TRANSLATION_APIS.get("doubao", {})
+            has_url = bool(api_config.get("url", ""))
+            has_session = bool(api_config.get("session", ""))
+            self.send_json({"configured": has_url and has_session, "has_url": has_url, "has_session": has_session})
+        
+        else:
+            self.send_error(404)
+
+def run_server(port=None):
+    if port is None:
+        port = SERVER_PORT
+    try:
+        server = HTTPServer(('0.0.0.0', port), Handler)
+        print(f"服务已启动: http://localhost:{port}", flush=True)
+        server.serve_forever()
+    except Exception as e:
+        print(f"启动失败: {e}", flush=True)
+
+if __name__ == "__main__":
+    port = None
+    for i, arg in enumerate(sys.argv):
+        if arg == "--port" and i + 1 < len(sys.argv):
+            try:
+                port = int(sys.argv[i + 1])
+            except:
+                pass
+    run_server(port)
