@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>翻译质量检查工具 - 教程</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+        .container { max-width: 900px; margin: 0 auto; }
+        h1 { color: #333; }
+        h2 { color: #555; border-bottom: 2px solid #9b59b6; padding-bottom: 10px; margin-top: 40px; }
+        h3 { color: #666; }
+        .back-link { display: inline-block; margin-bottom: 20px; padding: 10px 20px; background: #9b59b6; color: #fff; text-decoration: none; border-radius: 4px; }
+        .back-link:hover { opacity: 0.9; }
+        .method { background: #fff; padding: 20px; margin: 15px 0; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); border-left: 4px solid #3498db; }
+        .method h4 { margin-top: 0; color: #333; }
+        .method p { margin: 10px 0; color: #666; line-height: 1.6; }
+        .method ol, .method ul { margin: 10px 0; padding-left: 20px; color: #666; }
+        .method li { margin-bottom: 5px; line-height: 1.5; }
+        .method code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-size: 14px; color: #c7254e; }
+        .method pre { background: #263238; color: #aed581; padding: 15px; border-radius: 6px; overflow-x: auto; font-size: 13px; line-height: 1.5; margin: 10px 0; }
+        .method pre code { background: none; color: inherit; padding: 0; }
+        .method kbd { background: #eee; padding: 2px 6px; border-radius: 3px; border: 1px solid #ccc; font-size: 12px; }
+        .method a { color: #1976d2; }
+        .info { background: #d1ecf1; border-left-color: #17a2b8; padding: 15px; border-radius: 6px; margin: 15px 0; }
+        .info h4 { margin: 0 0 10px 0; color: #0c5460; }
+        .info ul { margin: 0; color: #0c5460; }
+        table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background: #f8f9fa; font-weight: bold; }
+        tr:nth-child(even) { background: #f9f9f9; }
+        .section { margin-bottom: 30px; }
+        .feature { display: flex; gap: 15px; flex-wrap: wrap; margin: 15px 0; }
+        .feature-item { flex: 1; min-width: 200px; background: #e8f5e9; padding: 15px; border-radius: 8px; }
+        .feature-item h5 { margin: 0 0 8px 0; color: #2e7d32; }
+        .feature-item p { margin: 0; color: #555; font-size: 14px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/" class="back-link">← 返回主页面</a>
+        
+        <h1>📖 翻译质量检查工具 - 教程</h1>
+        
+        <div class="section">
+            <h2>目录</h2>
+            <ul>
+                <li><a href="#section1">一、Groq API 优势</a></li>
+                <li><a href="#section2">二、获取 Groq API Key</a></li>
+                <li><a href="#section3">三、测试 API</a></li>
+                <li><a href="#section4">四、使用检查功能</a></li>
+                <li><a href="#section5">五、常见问题</a></li>
+            </ul>
+        </div>
+        
+        <div class="section" id="section1">
+            <h2>一、Groq API 优势</h2>
+            
+            <div class="feature">
+                <div class="feature-item">
+                    <h5>🚀 极速响应</h5>
+                    <p>300-1000 tokens/秒，翻译几乎无等待</p>
+                </div>
+                <div class="feature-item">
+                    <h5>💰 免费额度</h5>
+                    <p>每天 14,400 次请求，6,000 tokens/分钟</p>
+                </div>
+                <div class="feature-item">
+                    <h5>💳 无需信用卡</h5>
+                    <p>直接注册即可使用，无需绑定支付方式</p>
+                </div>
+            </div>
+            
+            <table>
+                <tr>
+                    <th>项目</th>
+                    <th>Groq API</th>
+                    <th>火山引擎</th>
+                    <th>豆包逆向</th>
+                </tr>
+                <tr>
+                    <td>速度</td>
+                    <td>极快 (300-1000 tok/s)</td>
+                    <td>快</td>
+                    <td>不稳定</td>
+                </tr>
+                <tr>
+                    <td>免费额度</td>
+                    <td>充足</td>
+                    <td>有限</td>
+                    <td>无限制</td>
+                </tr>
+                <tr>
+                    <td>稳定性</td>
+                    <td>✅ 稳定</td>
+                    <td>✅ 稳定</td>
+                    <td>❌ 易失效</td>
+                </tr>
+                <tr>
+                    <td>配置复杂度</td>
+                    <td>简单</td>
+                    <td>中等</td>
+                    <td>复杂</td>
+                </tr>
+            </table>
+        </div>
+        
+        <div class="section" id="section2">
+            <h2>二、获取 Groq API Key</h2>
+            
+            <div class="method">
+                <h4>步骤 1: 注册 Groq 账号</h4>
+                <ol>
+                    <li>访问 <a href="https://console.groq.com" target="_blank">console.groq.com</a></li>
+                    <li>点击 <strong>"Sign Up"</strong> 注册账号</li>
+                    <li>可以使用 Google 账号快速登录</li>
+                </ol>
+            </div>
+            
+            <div class="method">
+                <h4>步骤 2: 创建 API Key</h4>
+                <ol>
+                    <li>登录后进入 <strong>API Keys</strong> 页面</li>
+                    <li>点击 <strong>"Create API Key"</strong> 按钮</li>
+                    <li>输入一个名称（如 "translation-tool"）</li>
+                    <li>点击 <strong>"Submit"</strong> 创建</li>
+                    <li><strong>立即复制</strong> API Key（只显示一次！）</li>
+                </ol>
+            </div>
+            
+            <div class="method">
+                <h4>步骤 3: 在工具中配置</h4>
+                <ol>
+                    <li>打开翻译质量检查工具</li>
+                    <li>在 <strong>Groq API 配置</strong> 区域</li>
+                    <li>粘贴 API Key 到输入框</li>
+                    <li>选择模型（推荐 <code>llama-3.1-8b-instant</code> 速度更快）</li>
+                    <li>点击 <strong>"保存配置"</strong></li>
+                </ol>
+            </div>
+        </div>
+        
+        <div class="section" id="section3">
+            <h2>三、测试 API</h2>
+            
+            <div class="method">
+                <h4>使用 curl 测试</h4>
+                <p>在终端运行以下命令（将 <code>YOUR_API_KEY</code> 替换为你的密钥）：</p>
+                <pre><code>curl -X POST "https://api.groq.com/openai/v1/chat/completions" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "llama-3.1-8b-instant",
+    "messages": [{"role": "user", "content": "こんにちは、お元気ですか？"}]
+  }'</code></pre>
+                
+                <p>成功的响应：</p>
+                <pre><code>{
+  "choices": [{
+    "message": {
+      "content": "你好，你好吗？"
+    }
+  }]
+}</code></pre>
+            </div>
+            
+            <div class="method">
+                <h4>使用测试脚本</h4>
+                <pre><code># 运行测试脚本
+chmod +x test_groq.sh
+./test_groq.sh YOUR_API_KEY
+
+# 或指定模型
+./test_groq.sh YOUR_API_KEY llama-3.3-70b-versatile</code></pre>
+            </div>
+        </div>
+        
+        <div class="section" id="section4">
+            <h2>四、使用检查功能</h2>
+            
+            <div class="method">
+                <h4>1. 建立数据库</h4>
+                <p>点击页面上的 <strong>"建立数据库"</strong> 按钮，同步所有翻译条目到本地数据库。</p>
+            </div>
+            
+            <div class="method">
+                <h4>2. 选择检查规则</h4>
+                <p>勾选需要检查的问题类型：</p>
+                <ul>
+                    <li><strong>cn为空</strong> - cn字段为空或仅空格</li>
+                    <li><strong>未翻译占位符</strong> - 包含「」或……等占位符</li>
+                    <li><strong>长度异常</strong> - 中文字数与原文字数比例异常</li>
+                    <li><strong>相同内容</strong> - cn与jp完全相同</li>
+                    <li><strong>数字占位符</strong> - 包含 [NUM] 等未替换占位符</li>
+                    <li><strong>翻译质量低</strong> - 包含机械翻译痕迹</li>
+                </ul>
+            </div>
+            
+            <div class="method">
+                <h4>3. 查看和修正翻译</h4>
+                <ol>
+                    <li>点击 <strong>"确认并重新检测"</strong> 按钮</li>
+                    <li>使用 <strong>"上一条"</strong> / <strong>"下一条"</strong> 导航</li>
+                    <li>查看 AI 提供的翻译建议</li>
+                    <li>在文本框中编辑翻译</li>
+                    <li>点击 <strong>"保存→跳转"</strong> 保存并跳到下一条</li>
+                </ol>
+            </div>
+            
+            <div class="method">
+                <h4>4. 备份数据</h4>
+                <p>定期点击 <strong>"备份数据库"</strong> 按钮，防止数据丢失。</p>
+            </div>
+        </div>
+        
+        <div class="section" id="section5">
+            <h2>五、常见问题</h2>
+            
+            <div class="method">
+                <h4>Q: 翻译失败怎么办？</h4>
+                <ul>
+                    <li>检查 API Key 是否正确（不要有多余的空格）</li>
+                    <li>确认 API Key 还有额度（Groq 每日 14,400 次）</li>
+                    <li>查看浏览器控制台或后端日志的错误信息</li>
+                </ul>
+            </div>
+            
+            <div class="method">
+                <h4>Q: 速度变慢怎么办？</h4>
+                <ul>
+                    <li>尝试切换到 <code>llama-3.1-8b-instant</code> 模型</li>
+                    <li>等待几分钟后重试（可能达到速率限制）</li>
+                    <li>检查网络连接</li>
+                </ul>
+            </div>
+            
+            <div class="method">
+                <h4>Q: 如何选择模型？</h4>
+                <ul>
+                    <li><code>llama-3.1-8b-instant</code> - 速度快，免费额度内推荐</li>
+                    <li><code>llama-3.3-70b-versatile</code> - 质量更高，适合复杂翻译</li>
+                </ul>
+            </div>
+            
+            <div class="method">
+                <h4>Q: API Key 过期吗？</h4>
+                <p>Groq API Key 不会过期，但如果达到每日额度限制，需要等到次日或使用付费版本。</p>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>六、相关链接</h2>
+            <ul>
+                <li><a href="https://console.groq.com" target="_blank">Groq Console</a> - 管理 API Keys</li>
+                <li><a href="https://console.groq.com/docs/models" target="_blank">Groq 模型文档</a></li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>

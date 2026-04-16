@@ -1,5 +1,5 @@
 {
-  "data_file": "/home/edo/translation/table.json",
+  "data_file": "table.json",
   "config_file": "/home/edo/translation/config.json",
   "port": 5236,
   "translation_apis": {

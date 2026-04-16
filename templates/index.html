@@ -1,18 +1,20 @@
-''<!DOCTYPE html>
+<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>翻译质量检查工具</title>
     <style>
         * { box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
-        .container { max-width: 900px; margin: 0 auto; }
+        .container { max-width: 1100px; margin: 0 auto; }
         h1 { color: #333; }
         .toolbar { display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap; }
-        .toolbar button, .btn { padding: 10px 20px; background: #9b59b6; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+        .toolbar button, .btn { padding: 10px 20px; background: #9b59b6; color: #fff; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; }
         .toolbar button:hover, .btn:hover { opacity: 0.9; }
         .btn-green { background: #27ae60; }
-        .btn-blue { background: #3498db; }
         .btn-orange { background: #e67e22; }
         .settings { background: #fff; padding: 20px; margin-bottom: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         .settings h3 { margin-top: 0; }
@@ -20,9 +22,12 @@
         .filter-group label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
         .filter-group input[type="checkbox"] { transform: scale(1.2); }
         .config-row { display: flex; gap: 10px; margin-bottom: 15px; align-items: center; flex-wrap: wrap; }
-        .config-row select, .config-row input { padding: 8px; font-size: 14px; }
-        .config-row select { min-width: 200px; }
-        .config-row input[type="password"] { width: 200px; }
+        .config-row label { min-width: 100px; }
+        .config-row input, .config-row select { padding: 8px; font-size: 14px; }
+        .config-row input[type="password"] { width: 300px; }
+        .api-status { font-size: 12px; padding: 5px 10px; border-radius: 4px; }
+        .api-status.ok { background: #d4edda; color: #155724; }
+        .api-status.warn { background: #fff3cd; color: #856404; }
         .db-status { background: #fff; padding: 10px 15px; margin-bottom: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         .db-status .stat { display: inline-block; margin-right: 20px; }
         .db-status .stat-num { font-weight: bold; color: #3498db; }
@@ -30,25 +35,42 @@
         .stat-box { background: #fff; padding: 15px 25px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         .stat-box .num { font-size: 24px; font-weight: bold; color: #e74c3c; }
         .stat-box .label { color: #666; font-size: 14px; }
-        .stat-box.jump-box { display: flex; align-items: center; gap: 8px; padding: 10px 15px; }
-        .stat-box.jump-box input { width: 60px; padding: 5px; font-size: 14px; }
-        .stat-box.jump-box button { padding: 5px 10px; font-size: 12px; }
+        .main-content { display: flex; gap: 15px; margin-bottom: 20px; }
+        .sidebar { width: 180px; flex-shrink: 0; }
+        .translation-area { flex: 1; }
+        .jump-box { background: #fff; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 10px; }
+        .jump-box .label { font-weight: bold; font-size: 12px; color: #666; margin-bottom: 8px; }
+        .jump-box input { width: 100%; padding: 8px; font-size: 14px; margin-bottom: 8px; border: 1px solid #ddd; border-radius: 4px; }
+        .jump-box button { width: 100%; padding: 8px; background: #3498db; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+        .jump-box button:hover { opacity: 0.9; }
+        .search-box { background: #fff; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .search-box .label { font-weight: bold; font-size: 12px; color: #666; margin-bottom: 8px; }
+        .search-box input { width: 100%; padding: 8px; font-size: 14px; margin-bottom: 8px; border: 1px solid #ddd; border-radius: 4px; }
+        .search-box button { width: 100%; padding: 8px; background: #9b59b6; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+        .search-box button:hover { opacity: 0.9; }
         .issue-item { background: #fff; padding: 20px; margin-bottom: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         .issue-item .meta { color: #999; font-size: 12px; margin-bottom: 10px; }
         .issue-item .jp { background: #f8f9fa; padding: 10px; border-left: 3px solid #3498db; margin-bottom: 10px; white-space: pre-wrap; }
         .issue-item .cn { background: #f8f9fa; padding: 10px; border-left: 3px solid #27ae60; margin-bottom: 10px; white-space: pre-wrap; }
-        .issue-item .label { font-weight: bold; font-size: 12px; color: #666; }
+        .issue-item .label { font-weight: bold; font-size: 12px; color: #666; margin-top: 15px; margin-bottom: 5px; }
+        .issue-item .label:first-of-type { margin-top: 0; }
         .issue-item textarea { width: 100%; padding: 10px; font-size: 14px; margin-bottom: 10px; border: 1px solid #ddd; border-radius: 4px; }
         .issue-item .ai-row { display: flex; gap: 10px; margin-bottom: 10px; }
         .issue-item .ai-row textarea { flex: 1; margin-bottom: 0; }
         .issue-item .btn-copy { padding: 10px 15px; background: #95a5a6; color: #fff; border: none; border-radius: 4px; cursor: pointer; white-space: nowrap; }
         .issue-item .btn-copy:hover { background: #7f8c8d; }
+        .issue-item .btn-small { padding: 5px 10px; background: #95a5a6; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; }
+        .issue-item .btn-small:hover { background: #7f8c8d; }
         .issue-item .btn-row { display: flex; gap: 10px; flex-wrap: wrap; }
         .issue-item button { padding: 10px 20px; background: #3498db; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
         .issue-item button:hover { opacity: 0.9; }
         .issue-item .btn-save { background: #27ae60; font-weight: bold; }
-        .nav { position: fixed; bottom: 20px; right: 20px; display: flex; gap: 10px; }
+        .option-section { margin-bottom: 5px; }
+        .option-content { background: #f8f9fa; padding: 10px; border-left: 3px solid #27ae60; margin-bottom: 5px; white-space: pre-wrap; min-height: 30px; }
+        #ai-suggestion { border-left-color: #9b59b6; }
+        .nav { position: fixed; bottom: 20px; right: 20px; display: flex; gap: 10px; z-index: 1000; }
         .nav button { padding: 15px 25px; background: #2ecc71; color: #fff; border: none; border-radius: 8px; cursor: pointer; box-shadow: 0 4px 8px rgba(0,0,0,0.2); }
+        .nav button:hover { background: #27ae60; }
         .progress { color: #666; font-size: 14px; }
         .error { color: #e74c3c; }
     </style>
@@ -60,59 +82,69 @@
         <div class="toolbar">
             <button onclick="initDb()">建立数据库</button>
             <button onclick="backupDb()">备份数据库</button>
-        </div>
-        
-        <div class="db-status" id="db-status">
-            加载中...
+            <a href="/tutorial.html" target="_blank" class="btn" style="background: #e67e22; text-decoration: none;">📖 查看教程</a>
         </div>
         
         <div class="settings">
-            <h3>过滤设置</h3>
-            <div class="filter-group">
-                <label><input type="checkbox" id="cn_empty" value="cn_empty"> cn为空</label>
-                <label><input type="checkbox" id="placeholder" value="placeholder"> 未翻译占位符</label>
-                <label><input type="checkbox" id="length_abnormal" value="length_abnormal"> 长度异常</label>
-                <label><input type="checkbox" id="same_content" value="same_content"> 相同内容</label>
-                <label><input type="checkbox" id="digit_placeholder" value="digit_placeholder"> 数字占位符</label>
-                <label><input type="checkbox" id="low_quality" value="low_quality"> 翻译质量低</label>
+            <h3>设置</h3>
+            <div class="config-row">
+                <label>API Key:</label>
+                <input type="password" id="groq-api-key" placeholder="gsk_xxxxxxxxxxxx">
             </div>
             <div class="config-row">
-                <label>翻译源:</label>
-                <select id="api-select">
-                    <option value="">加载中...</option>
+                <label>模型:</label>
+                <select id="groq-model" style="width:200px;">
+                    <option value="llama-3.3-70b-versatile" selected>llama-3.3-70b-versatile (高质量)</option>
+                    <option value="llama-3.1-8b-instant">llama-3.1-8b-instant (快速)</option>
                 </select>
-                <span id="api-status" style="font-size:12px;color:#666;"></span>
             </div>
-            <div class="config-row" id="doubao-url-row" style="display:none;">
-                <label>豆包API地址:</label>
-                <input type="text" id="doubao-url" placeholder="https://xxx.onrender.com/v1/chat/completions" style="width:350px;">
-                <button class="btn btn-small" onclick="saveDoubaoConfig()">保存</button>
+            <div class="config-row">
+                <label>代理:</label>
+                <label><input type="checkbox" id="use-proxy"> 使用代理 (socks5://127.0.0.1:10808)</label>
+                <span id="proxy-status" style="font-size:12px;color:#666;"></span>
             </div>
-            <div class="config-row" id="doubao-session-row" style="display:none;">
-                <label>豆包SessionID:</label>
-                <input type="password" id="doubao-session" placeholder="从doubao.com获取" style="width:300px;">
-                <button class="btn btn-small" onclick="saveDoubaoConfig()">保存</button>
-                <a href="#" onclick="showSessionHelp(); return false;" style="font-size:12px;margin-left:10px;">如何获取？</a>
+            <div class="config-row">
+                <label>目标语言:</label>
+                <select id="target-lang">
+                    <option value="en">english</option>
+                    <option value="fr">français</option>
+                    <option value="de">deutsch</option>
+                    <option value="es">español</option>
+                    <option value="pt">português</option>
+                    <option value="ja">日本語</option>
+                    <option value="ko">한국어</option>
+                    <option value="zh-Hant">繁體中文</option>
+                    <option value="zh-Hans" selected>简体中文</option>
+                </select>
             </div>
-            <button class="btn btn-green" onclick="applyFilter()">确认并重新检测</button>
-        </div>
-        
-        <div class="stats">
-            <div class="stat-box">
-                <div class="num" id="issue-count">-</div>
-                <div class="label">问题数</div>
-            </div>
-            <div class="stat-box">
-                <div class="num" id="total-count">-</div>
-                <div class="label">总数</div>
-            </div>
-            <div class="stat-box jump-box">
-                <input type="number" id="jump-input" placeholder="条号" min="1" onkeydown="if(event.key==='Enter')jumpToItem()">
-                <button onclick="jumpToItem()">跳转</button>
+            <div class="config-row" style="margin-top:15px;">
+                <button class="btn btn-green" onclick="saveSettings()">保存设置</button>
+                <span id="api-status" class="api-status warn">⚠ 请配置API Key</span>
             </div>
         </div>
-        
-        <div id="issues-list"></div>
+
+        <div class="db-status" id="db-status">
+            加载中...
+        </div>
+
+        <div class="main-content">
+            <div class="sidebar">
+                <div class="jump-box">
+                    <div class="label">跳转</div>
+                    <input type="number" id="jump-input" placeholder="条号" min="1" onkeydown="if(event.key==='Enter')jumpToItem()">
+                    <button onclick="jumpToItem()">跳转</button>
+                </div>
+                <div class="search-box">
+                    <div class="label">搜索</div>
+                    <input type="text" id="search-input" placeholder="搜索原文或翻译" onkeydown="if(event.key==='Enter')nextSearch()">
+                    <button onclick="nextSearch()">搜索</button>
+                </div>
+            </div>
+            
+            <div class="translation-area">
+                <div id="issues-list"></div>
+            </div>
+        </div>
     </div>
     
     <div class="nav">
@@ -124,85 +156,121 @@
         let currentIdx = 0;
         let issues = [];
         let allItems = [];
+        let useProxy = false;
+        let savedApiKey = null;
         
         async function init() {
             await loadDbStatus();
-            await loadTranslationApis();
             allItems = (await fetch('/api/all').then(r => r.json())).items;
-            document.getElementById('total-count').textContent = allItems.length;
-            await applyFilter();
-        }
-        
-        async function loadTranslationApis() {
-            try {
-                const resp = await fetch('/api/translation-apis');
-                const data = await resp.json();
-                const select = document.getElementById('api-select');
-                select.innerHTML = '';
-                data.apis.forEach(api => {
-                    const opt = document.createElement('option');
-                    opt.value = api.key;
-                    opt.textContent = api.name;
-                    select.appendChild(opt);
-                });
-                if (data.default) {
-                    select.value = data.default;
-                }
-                document.getElementById('api-status').textContent = '✓ 已加载';
-                await checkDoubaoConfig();
-            } catch (e) {
-                console.error('加载翻译API失败:', e);
-                document.getElementById('api-status').textContent = '✗ 加载失败';
-            }
-        }
-        
-        async function checkDoubaoConfig() {
-            const resp = await fetch('/api/doubao/status');
+            await checkGroqStatus();
+            await loadProxyStatus();
+            await loadSettings();
+            const resp = await fetch('/api/next');
             const data = await resp.json();
-            const urlRow = document.getElementById('doubao-url-row');
-            const sessionRow = document.getElementById('doubao-session-row');
-            if (data.configured) {
-                urlRow.style.display = 'none';
-                sessionRow.style.display = 'none';
-                document.getElementById('api-status').textContent = '✓ 已加载';
+            issues = data.items || [];
+            currentIdx = 0;
+            if (issues.length > 0) {
+                renderItem();
             } else {
-                urlRow.style.display = 'flex';
-                sessionRow.style.display = 'flex';
-                document.getElementById('api-status').textContent = '⚠ 请配置豆包';
+                document.getElementById('issues-list').innerHTML = '<p>全部翻译已确认完成！</p>';
             }
         }
         
-        async function saveDoubaoConfig() {
-            const url = document.getElementById('doubao-url').value;
-            const session = document.getElementById('doubao-session').value;
-            const resp = await fetch('/api/doubao/config', {
+        async function loadSettings() {
+            const resp = await fetch('/api/groq/status');
+            const data = await resp.json();
+            if (data.model) {
+                document.getElementById('groq-model').value = data.model;
+            }
+            if (data.target_lang) {
+                document.getElementById('target-lang').value = data.target_lang;
+            }
+        }
+        
+        async function checkGroqStatus() {
+            const resp = await fetch('/api/groq/status');
+            const data = await resp.json();
+            const statusEl = document.getElementById('api-status');
+            if (data.configured) {
+                statusEl.className = 'api-status ok';
+                statusEl.textContent = '✓ 已配置';
+                savedApiKey = data.has_key ? '(已有)' : null;
+            } else {
+                statusEl.className = 'api-status warn';
+                statusEl.textContent = '⚠ 请配置API Key';
+                savedApiKey = null;
+            }
+        }
+        
+        async function loadProxyStatus() {
+            const resp = await fetch('/api/proxy/status');
+            const data = await resp.json();
+            useProxy = data.enabled;
+            document.getElementById('use-proxy').checked = useProxy;
+            updateProxyStatus();
+        }
+        
+        function updateProxyStatus() {
+            const statusEl = document.getElementById('proxy-status');
+            if (useProxy) {
+                statusEl.textContent = '✓ 代理已启用';
+                statusEl.style.color = '#27ae60';
+            } else {
+                statusEl.textContent = '⚠ 直连（可能无法访问）';
+                statusEl.style.color = '#e74c3c';
+            }
+        }
+        
+        async function toggleProxy() {
+            useProxy = document.getElementById('use-proxy').checked;
+            const resp = await fetch('/api/proxy/config', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({url, session})
+                body: JSON.stringify({enabled: useProxy})
+            });
+            const data = await resp.json();
+            if (data.success) {
+                updateProxyStatus();
+            }
+        }
+        
+        async function saveSettings() {
+            const apiKeyInput = document.getElementById('groq-api-key');
+            const model = document.getElementById('groq-model').value;
+            const targetLang = document.getElementById('target-lang').value;
+            const useProxy = document.getElementById('use-proxy').checked;
+            let apiKey = apiKeyInput.value;
+            if (!apiKey && savedApiKey) {
+                apiKey = savedApiKey;
+            }
+            const resp = await fetch('/api/groq/config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({apiKey, model, targetLang})
             });
             const result = await resp.json();
+            
+            const proxyResp = await fetch('/api/proxy/config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({enabled: useProxy})
+            });
+            
             if (result.success) {
-                alert('保存成功！');
-                await checkDoubaoConfig();
+                await checkGroqStatus();
+                await loadSettings();
+                await toggleProxy();
+                alert('设置已保存！');
             }
         }
-        
-        function showSessionHelp() {
-            alert('如何获取豆包SessionID:\n\n1. 访问 https://www.doubao.com 并登录账号\n2. 按 F12 打开浏览器开发者工具\n3. 切换到 Application（应用）标签\n4. 左侧 Cookies → 点击 https://www.doubao.com\n5. 找到 sessionid 字段，复制其值\n6. 粘贴到上方的输入框中\n\n提示: SessionID 可能会过期，过期后需重新获取');
-        }
-        
-        document.getElementById('api-select').addEventListener('change', function() {
-            if (this.value === 'doubao') {
-                checkDoubaoConfig();
-            }
-        });
         
         async function loadDbStatus() {
             const resp = await fetch('/api/db/stats');
             const data = await resp.json();
             const el = document.getElementById('db-status');
             if (data.exists) {
-                el.innerHTML = `<span class="stat">数据库: 已建立</span><span class="stat">记录数: <span class="stat-num">${data.total}</span></span><span class="stat">已翻译: <span class="stat-num">${data.translated}</span></span><span class="stat">已修复: <span class="stat-num">${data.fixed}</span></span>`;
+                const unfixed = data.total - data.fixed;
+                el.innerHTML = `<span class="stat">记录数: <span class="stat-num">${data.total}</span></span><span class="stat">待确认: <span class="stat-num">${unfixed}</span></span><span class="stat">已确认: <span class="stat-num">${data.fixed}</span></span><span class="stat">已翻译: <span class="stat-num">${data.translated}</span></span>`;
             } else {
                 el.innerHTML = `<span class="stat">数据库: 未建立</span>`;
             }
@@ -230,49 +298,36 @@
             }
         }
         
-        async function applyFilter() {
-            const selectedRules = [];
-            ['cn_empty', 'placeholder', 'length_abnormal', 'same_content', 'digit_placeholder', 'low_quality'].forEach(r => {
-                if (document.getElementById(r).checked) selectedRules.push(r);
-            });
-            
-            const apiSource = document.getElementById('api-select').value;
-            
-            const resp = await fetch('/api/filter', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({rules: selectedRules, api: apiSource})
-            });
-            const data = await resp.json();
-            issues = data.issues;
-            currentIdx = 0;
-            document.getElementById('issue-count').textContent = data.total;
-            renderItem();
-        }
-        
         function renderItem() {
             if (issues.length === 0) {
-                document.getElementById('issues-list').innerHTML = '<p>请勾选过滤条件或点击下方按钮查看所有</p><button class="btn btn-green" onclick="showAll()">显示全部翻译</button>';
+                document.getElementById('issues-list').innerHTML = '<p>全部翻译已确认完成！</p>';
                 return;
             }
             if (currentIdx >= issues.length) {
-                document.getElementById('issues-list').innerHTML = '<p>没有更多问题</p>';
-                return;
+                currentIdx = issues.length - 1;
             }
             const issue = issues[currentIdx];
             const item = issue.item;
+            const currentCn = item.cn || '';
             document.getElementById('issues-list').innerHTML = `
                 <div class="issue-item">
-                    <div class="meta">文件: ${issue.file} | 索引: ${issue.index}</div>
-                    <div class="progress">进度: ${currentIdx + 1} / ${issues.length} | 问题: ${issue.issues.join(', ')}</div>
+                    <div class="meta">ID: ${issue.id} | 文件: ${issue.file} | 索引: ${issue.index}</div>
+                    <div class="progress">进度: ${currentIdx + 1} / ${issues.length}</div>
                     <div class="label">原文 (jp):</div>
                     <div class="jp">${item.jp || '(空)'}</div>
-                    <div class="label">当前翻译 (cn):</div>
-                    <div class="cn">${item.cn || '(空)'}</div>
-                    <div class="label">AI建议:</div>
+                    
+                    <div class="option-section">
+                        <div class="label">选项 A - 当前翻译 (cn): <button class="btn-small" onclick="copyToEditor('current')">📋复制</button></div>
+                        <div class="option-content" id="current-cn">${currentCn || '(空)'}</div>
+                    </div>
+                    
+                    <div class="label">选项 B - AI建议: <button class="btn-small" onclick="copyToEditor('ai')">📋复制</button> <span id="ai-loading" style="font-size:12px;color:#999;"></span></div>
+                    <div class="option-content" id="ai-suggestion">(加载中...)</div>
+                    
+                    <div class="label">编辑区:</div>
                     <div class="ai-row">
-                        <textarea id="ai-textarea" rows="3">${item.cn || ''}</textarea>
-                        <button class="btn-copy" onclick="copyText()" title="复制">📋复制</button>
+                        <textarea id="editor-textarea" rows="3">${currentCn}</textarea>
+                        <button class="btn-copy" onclick="copyFromEditor()" title="复制">📋复制</button>
                     </div>
                     <div class="btn-row">
                         <button class="btn-save" onclick="saveAndNext()">保存→跳转</button>
@@ -282,8 +337,17 @@
             loadAISuggestion(item.jp);
         }
         
-        function copyText() {
-            const textarea = document.getElementById('ai-textarea');
+        function copyToEditor(source) {
+            const editor = document.getElementById('editor-textarea');
+            if (source === 'current') {
+                editor.value = document.getElementById('current-cn').textContent || '';
+            } else if (source === 'ai') {
+                editor.value = document.getElementById('ai-suggestion').textContent || '';
+            }
+        }
+        
+        function copyFromEditor() {
+            const textarea = document.getElementById('editor-textarea');
             textarea.select();
             document.execCommand('copy');
             const btn = document.querySelector('.btn-copy');
@@ -292,28 +356,31 @@
         }
         
         async function loadAISuggestion(text) {
-            if (!text) return;
-            const apiSource = document.getElementById('api-select').value;
-            const resp = await fetch('/api/translate', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({text: text, api: apiSource})
-            });
-            const data = await resp.json();
-            const textarea = document.getElementById('ai-textarea');
-            if (data.translation && !data.translation.includes('错误') && !data.translation.includes('失败')) {
-                textarea.value = data.translation;
-            } else if (data.translation) {
-                textarea.value = '';
-                textarea.placeholder = data.translation;
+            if (!text) {
+                document.getElementById('ai-suggestion').textContent = '(无原文)';
+                return;
             }
-        }
-        
-        async function showAll() {
-            currentIdx = 0;
-            issues = allItems;
-            document.getElementById('issue-count').textContent = issues.length;
-            renderItem();
+            const loadingEl = document.getElementById('ai-loading');
+            const suggestionEl = document.getElementById('ai-suggestion');
+            loadingEl.textContent = '(加载中...)';
+            try {
+                const targetLang = document.getElementById('target-lang')?.value || 'zh-Hans';
+                const resp = await fetch('/api/translate', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({text: text, useProxy: useProxy, targetLang: targetLang})
+                });
+                const data = await resp.json();
+                if (data.translation) {
+                    suggestionEl.textContent = data.translation;
+                } else {
+                    suggestionEl.textContent = '(翻译服务返回为空)';
+                }
+            } catch (e) {
+                suggestionEl.textContent = '(翻译请求失败)';
+                console.error('翻译请求失败:', e);
+            }
+            loadingEl.textContent = '';
         }
         
         async function saveAndReload(cn) {
@@ -321,44 +388,96 @@
             const resp = await fetch('/api/update', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({file: issue.file, index: issue.index, cn: cn})
+                body: JSON.stringify({file: issue.file, index: issue.index, cn: cn || ''})
             });
             const data = await resp.json();
             if (data.success) {
                 await loadDbStatus();
-                nextItem();
+                const nextResp = await fetch('/api/next');
+                const nextData = await nextResp.json();
+                issues = nextData.items || [];
+                if (issues.length === 0) {
+                    document.getElementById('issues-list').innerHTML = '<p>全部翻译已确认完成！</p>';
+                    currentIdx = 0;
+                } else if (currentIdx >= issues.length) {
+                    currentIdx = issues.length - 1;
+                    renderItem();
+                } else {
+                    renderItem();
+                }
             }
         }
         
         async function saveAndNext() {
-            const cn = document.getElementById('ai-textarea').value;
-            if (cn) await saveAndReload(cn);
+            const cn = document.getElementById('editor-textarea').value;
+            if (!cn || cn.trim() === '') {
+                alert('请先填写翻译内容');
+                return;
+            }
+            await saveAndReload(cn);
         }
         
-        async function manualSaveAndNext() {
-            const cn = document.getElementById('ai-textarea').value;
-            if (cn) await saveAndReload(cn);
+        function prevItem() { 
+            if (currentIdx > 0) { 
+                currentIdx--; 
+                renderItem(); 
+            }
         }
-        
-        function prevItem() { if (currentIdx > 0) { currentIdx--; renderItem(); } }
-        function nextItem() { currentIdx++; renderItem(); }
+        async function nextItem() { 
+            if (currentIdx < issues.length - 1) { 
+                currentIdx++; 
+                renderItem(); 
+            } else {
+                const resp = await fetch('/api/next');
+                const data = await resp.json();
+                issues = data.items || [];
+                if (issues.length > 0) {
+                    currentIdx = 0;
+                    renderItem();
+                } else {
+                    alert('已到最后一条');
+                }
+            }
+        }
         function jumpToItem() {
             const input = document.getElementById('jump-input');
             const num = parseInt(input.value);
-            if (!num || num < 1) {
-                alert('请输入有效的数字');
-                return;
-            }
-            if (issues.length === 0) {
-                alert('当前没有数据，请先应用过滤');
-                return;
-            }
-            if (num > issues.length) {
-                alert('超出范围，当前只有 ' + issues.length + ' 条');
-                input.value = issues.length;
-                return;
-            }
+            if (!num || num < 1) { alert('请输入有效的数字'); return; }
+            if (issues.length === 0) { alert('当前没有数据'); return; }
+            if (num > issues.length) { alert('超出范围，当前只有 ' + issues.length + ' 条'); input.value = issues.length; return; }
             currentIdx = num - 1;
+            renderItem();
+        }
+        
+        let searchResults = [];
+        let searchIdx = 0;
+        
+        async function doSearch() {
+            const keyword = document.getElementById('search-input').value.trim();
+            if (!keyword) return;
+            
+            const resp = await fetch('/api/search?keyword=' + encodeURIComponent(keyword) + '&type=all');
+            const data = await resp.json();
+            searchResults = data.results || [];
+            searchIdx = 0;
+            
+            if (searchResults.length === 0) {
+                alert('未找到匹配结果');
+                return;
+            }
+            
+            issues = [searchResults[searchIdx]];
+            document.getElementById('issue-count').textContent = searchResults.length + ' (搜索)';
+            renderItem();
+        }
+        
+        function nextSearch() {
+            if (searchResults.length === 0) {
+                doSearch();
+                return;
+            }
+            searchIdx = (searchIdx + 1) % searchResults.length;
+            issues = [searchResults[searchIdx]];
             renderItem();
         }
         

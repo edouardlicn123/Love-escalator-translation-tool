@@ -1,41 +1,97 @@
 #!/usr/bin/env python3
 import json, os, re, sys, sqlite3, datetime, shutil, urllib.request, urllib.error
+import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-DATA_FILE = CONFIG_FILE = DB_FILE = HF_TOKEN = None
+PROXY_HOST = "127.0.0.1"
+PROXY_PORT = 10808
+PROXY_URL = f"socks5://{PROXY_HOST}:{PROXY_PORT}"
+PROXIES = {"http": PROXY_URL, "https": PROXY_URL}
+
+USE_PROXY = True
+
+DATA_FILE = CONFIG_FILE = DB_FILE = None
 SERVER_PORT = 5000
-HF_MODEL = None
 LENGTH_RATIO_MIN, LENGTH_RATIO_MAX = 0.3, 2.5
-CHECK_RULES, AVAILABLE_MODELS = {}, []
-TRANSLATION_APIS, DEFAULT_API = {}, "doubao"
+CHECK_RULES = {}
 issues_list, all_items = [], []
+
+TRANSLATION_APIS = {
+    "groq": {
+        "name": "Groq API (推荐)",
+        "url": "https://api.groq.com/openai/v1",
+        "model": "llama-3.1-8b-instant",
+        "target_lang": "zh-Hans"
+    }
+}
+DEFAULT_API = "groq"
+DEFAULT_MODEL = "llama-3.3-70b-versatile"
+
+LANG_MAP = {
+    "en": "English",
+    "fr": "French (français)",
+    "de": "German (deutsch)",
+    "es": "Spanish (español)",
+    "pt": "Portuguese (português)",
+    "ja": "Japanese (日本語)",
+    "ko": "Korean (한국어)",
+    "zh-Hant": "Traditional Chinese (繁體中文)",
+    "zh-Hans": "Simplified Chinese (简体中文)"
+}
+
+TRANSLATION_APIS = {
+    "groq": {
+        "name": "Groq API (推荐)",
+        "url": "https://api.groq.com/openai/v1",
+        "model": DEFAULT_MODEL,
+        "target_lang": "zh-Hans"
+    }
+}
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     conn.execute('''CREATE TABLE IF NOT EXISTS translation_status (id INTEGER PRIMARY KEY, file_key TEXT, index_id INTEGER, jp TEXT, cn TEXT, is_translated INTEGER DEFAULT 0, is_fixed INTEGER DEFAULT 0, issue_type TEXT, ai_suggestion TEXT, created_at TEXT, updated_at TEXT, UNIQUE(file_key, index_id))''')
-    conn.execute('''CREATE TABLE IF NOT EXISTS doubao_config (id INTEGER PRIMARY KEY CHECK (id=1), api_url TEXT, session_id TEXT, updated_at TEXT)''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS groq_config (id INTEGER PRIMARY KEY CHECK (id=1), api_key TEXT, model TEXT DEFAULT 'llama-3.3-70b-versatile', target_lang TEXT DEFAULT 'zh-Hans', updated_at TEXT)''')
+    try:
+        conn.execute("ALTER TABLE groq_config ADD COLUMN target_lang TEXT DEFAULT 'zh-Hans'")
+    except sqlite3.OperationalError:
+        pass
     conn.commit(); conn.close()
 
-def load_doubao_config():
-    global TRANSLATION_APIS
+def load_groq_config():
     if not DB_FILE or not os.path.exists(DB_FILE): return
-    conn = sqlite3.connect(DB_FILE)
-    row = conn.cursor().execute("SELECT api_url, session_id FROM doubao_config WHERE id=1").fetchone()
-    conn.close()
+    row = None
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        try:
+            row = conn.cursor().execute("SELECT api_key, model, target_lang FROM groq_config WHERE id=1").fetchone()
+        except sqlite3.OperationalError:
+            row = conn.cursor().execute("SELECT api_key, model FROM groq_config WHERE id=1").fetchone()
+            if row:
+                row = (row[0], row[1], "zh-Hans")
+        finally:
+            conn.close()
+    except Exception:
+        pass
     if row:
-        if "doubao" not in TRANSLATION_APIS: TRANSLATION_APIS["doubao"] = {"name": "豆包AI (免费)", "method": "POST", "type": "openai"}
-        TRANSLATION_APIS["doubao"]["url"], TRANSLATION_APIS["doubao"]["session"] = row[0] or "", row[1] or ""
+        TRANSLATION_APIS["groq"]["api_key"] = row[0] or ""
+        TRANSLATION_APIS["groq"]["model"] = row[1] or DEFAULT_MODEL
+        TRANSLATION_APIS["groq"]["target_lang"] = row[2] if len(row) > 2 else "zh-Hans"
 
-def save_doubao_config(api_url, session_id):
+def save_groq_config(api_key, model, target_lang="zh-Hans"):
     conn = sqlite3.connect(DB_FILE)
-    conn.execute("INSERT OR REPLACE INTO doubao_config VALUES(1,?,?,?)", (api_url, session_id, datetime.datetime.now().isoformat()))
+    cur = conn.cursor()
+    if api_key == "(已有)":
+        old = cur.execute("SELECT api_key FROM groq_config WHERE id=1").fetchone()
+        api_key = old[0] if old else ""
+    cur.execute("INSERT OR REPLACE INTO groq_config VALUES(1,?,?,?,?)", (api_key, model, target_lang, datetime.datetime.now().isoformat()))
     conn.commit(); conn.close()
-    global TRANSLATION_APIS
-    TRANSLATION_APIS["doubao"]["url"] = api_url
-    TRANSLATION_APIS["doubao"]["session"] = session_id
+    TRANSLATION_APIS["groq"]["api_key"] = api_key
+    TRANSLATION_APIS["groq"]["model"] = model
+    TRANSLATION_APIS["groq"]["target_lang"] = target_lang
 
 def load_config():
-    global DATA_FILE, CONFIG_FILE, HF_TOKEN, SERVER_PORT, HF_MODEL, LENGTH_RATIO_MIN, LENGTH_RATIO_MAX, CHECK_RULES, AVAILABLE_MODELS, DB_FILE, TRANSLATION_APIS, DEFAULT_API
+    global DATA_FILE, CONFIG_FILE, SERVER_PORT, LENGTH_RATIO_MIN, LENGTH_RATIO_MAX, CHECK_RULES, DB_FILE
     script_dir = os.path.dirname(os.path.abspath(__file__))
     config_path = os.path.join(script_dir, "config.json")
     db_path = os.path.join(script_dir, "translation_status.db")
@@ -43,25 +99,16 @@ def load_config():
         if os.path.exists(config_path):
             with open(config_path, encoding='utf-8') as f:
                 c = json.load(f)
-                DATA_FILE = c.get("data_file", "/home/edo/translation/table.json")
-                CONFIG_FILE = c.get("config_file", config_path)
-                HF_TOKEN = c.get("hf_token", "")
+                DATA_FILE = c.get("data_file", "table.json")
                 SERVER_PORT = c.get("port", 5000)
-                HF_MODEL = c.get("hf_model", "")
                 LENGTH_RATIO_MIN = c.get("length_ratio_min", 0.3)
                 LENGTH_RATIO_MAX = c.get("length_ratio_max", 2.5)
                 CHECK_RULES = c.get("check_rules", {})
-                AVAILABLE_MODELS = c.get("available_models", [])
-                TRANSLATION_APIS = c.get("translation_apis", {})
-                DEFAULT_API = c.get("default_api", "doubao")
         DB_FILE = db_path
     except Exception as e:
         print(f"配置加载失败: {e}")
-        DATA_FILE, CONFIG_FILE, DB_FILE = "/home/edo/translation/table.json", config_path, db_path
-        HF_TOKEN, SERVER_PORT = "", 5000
-        DEFAULT_API = "doubao"
-        TRANSLATION_APIS = {"doubao": {"name": "豆包AI (免费)", "url": "", "method": "POST", "session": "", "type": "openai"}}
-        LENGTH_RATIO_MIN, LENGTH_RATIO_MAX = 0.3, 2.5
+        DATA_FILE = "table.json"
+        SERVER_PORT = 5382
 
 def get_db_stats():
     if not os.path.exists(DB_FILE): return {"exists": False, "total": 0, "translated": 0, "fixed": 0}
@@ -86,15 +133,12 @@ def sync_db():
         for idx, item in enumerate(items):
             jp, cn = item.get("jp", ""), item.get("cn", "")
             is_translated = 1 if cn and cn.strip() else 0
-            issue = check_single_issue_type(item)
-            row = cur.execute("SELECT is_fixed FROM translation_status WHERE file_key=? AND index_id=?", (file_key, idx)).fetchone()
-            was_fixed = row[0] if row else 0
-            is_fixed = was_fixed if (issue and was_fixed) else (1 if not issue else 0)
-            if row:
-                cur.execute("UPDATE translation_status SET cn=?, is_translated=?, is_fixed=?, issue_type=? WHERE file_key=? AND index_id=?", (cn, is_translated, is_fixed, issue, file_key, idx))
+            is_fixed = 0
+            if row := cur.execute("SELECT is_fixed FROM translation_status WHERE file_key=? AND index_id=?", (file_key, idx)).fetchone():
+                cur.execute("UPDATE translation_status SET jp=?, cn=?, is_translated=?, is_fixed=? WHERE file_key=? AND index_id=?", (jp, cn, is_translated, is_fixed, file_key, idx))
                 updated += 1
             else:
-                cur.execute("INSERT INTO translation_status VALUES (?,?,?,?,?,?,?,?,?,?)", (None, file_key, idx, jp, cn, is_translated, is_fixed, issue, now, now))
+                cur.execute("INSERT INTO translation_status VALUES (?,?,?,?,?,?,?,?,?,?)", (None, file_key, idx, jp, cn, is_translated, is_fixed, "", now, now))
                 inserted += 1
     conn.commit(); conn.close()
     return {"inserted": inserted, "updated": updated}
@@ -145,27 +189,56 @@ def check_single_issue(item, issue_type):
         if jp_len > 0: return cn_len < jp_len * LENGTH_RATIO_MIN or cn_len > jp_len * LENGTH_RATIO_MAX
     return False
 
-def translate_with_api(text, api_name=None):
+def translate_with_api(text, api_name=None, use_proxy=None, target_lang=None):
     if not text: return None
     api_key = api_name or DEFAULT_API
     if api_key not in TRANSLATION_APIS: return "未找到翻译引擎"
     try:
         api_config = TRANSLATION_APIS.get(api_key, {})
-        url, session = api_config.get("url", ""), api_config.get("session", "")
-        if api_key == "doubao":
-            if not url: return "请先在设置中填写豆包API地址"
-            if not session: return "请先在设置中填写豆包SessionID"
-            payload = {"model": "doubao", "messages": [{"role": "system", "content": "你是一个专业翻译助手，将用户输入的日文翻译成中文，只返回翻译结果，不要任何解释。"}, {"role": "user", "content": text}], "stream": False}
-            req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {session}'}, method='POST')
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                if resp.status == 200:
-                    result = json.loads(resp.read().decode('utf-8'))
-                    return result.get("choices", [{}])[0].get("message", {}).get("content", "")
-    except Exception as e: return f"翻译失败: {str(e)}"
+        
+        if api_key == "groq":
+            api_key_groq = api_config.get("api_key", "")
+            if not api_key_groq: return "请先在设置中填写Groq API Key"
+            
+            model_name = api_config.get("model", DEFAULT_MODEL)
+            base_url = api_config.get("url", "https://api.groq.com/openai/v1")
+            url = f"{base_url}/chat/completions"
+            
+            lang = target_lang or api_config.get("target_lang", "zh-Hans")
+            lang_name = LANG_MAP.get(lang, "Simplified Chinese (简体中文)")
+            
+            payload = {
+                "model": model_name,
+                "messages": [
+                    {"role": "system", "content": f"You are a professional translator. Translate the following Japanese text to {lang_name}. Only return the translation, no explanations."},
+                    {"role": "user", "content": text}
+                ],
+                "stream": False
+            }
+            headers = {
+                'Content-Type': 'application/json',
+                'Authorization': f'Bearer {api_key_groq}'
+            }
+            
+            import json
+            payload_str = json.dumps(payload, ensure_ascii=False)
+            
+            proxies = PROXIES if (use_proxy if use_proxy is not None else USE_PROXY) else None
+            resp = requests.post(url, data=payload_str.encode('utf-8'), headers=headers, proxies=proxies, timeout=30)
+            if resp.status_code == 200:
+                result = resp.json()
+                content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+                return content or "AI返回内容为空"
+            else:
+                error = resp.json().get("error", {}).get("message", resp.text[:200])
+                return f"翻译失败: HTTP {resp.status_code} - {error}"
+    except requests.exceptions.ProxyError as e:
+        return "Proxy connection failed: " + str(e)[:100]
+    except UnicodeEncodeError as e:
+        return "Translation encoding error: " + str(e)
+    except Exception as e:
+        return "Translation failed: " + str(e)
     return "翻译服务暂不可用"
-
-def translate_deeplx(text): return translate_with_api(text, "doubao")
-def translate_hf(text): return translate_with_api(text, "doubao")
 
 def load_template():
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -186,16 +259,58 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == '/':
             self.send_response(200)
             self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+            self.send_header('Pragma', 'no-cache')
+            self.send_header('Expires', '0')
             self.end_headers()
             self.wfile.write(HTML_TEMPLATE.encode('utf-8'))
+        elif self.path == '/tutorial.html':
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            with open(os.path.join(script_dir, 'templates', 'tutorial.html'), 'r', encoding='utf-8') as f:
+                content = f.read()
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(content.encode('utf-8'))
         elif self.path == '/api/all':
             self.send_json({"total": len(all_items), "items": [{"file": e["file"], "index": e["index"], "item": e["item"], "issues": []} for e in all_items]})
-        elif self.path == '/api/models': self.send_json({"models": AVAILABLE_MODELS})
+        elif self.path == '/api/models': self.send_json({"models": []})
         elif self.path == '/api/translation-apis': self.send_json({"apis": [{"key": k, "name": v.get("name", k)} for k, v in TRANSLATION_APIS.items()], "default": DEFAULT_API})
         elif self.path == '/api/db/stats': self.send_json(get_db_stats())
-        elif self.path == '/api/doubao/status':
-            api_config = TRANSLATION_APIS.get("doubao", {})
-            self.send_json({"configured": bool(api_config.get("url", "")) and bool(api_config.get("session", "")), "has_url": bool(api_config.get("url", "")), "has_session": bool(api_config.get("session", ""))})
+        elif self.path == '/api/groq/status':
+            api_config = TRANSLATION_APIS.get("groq", {})
+            has_key = bool(api_config.get("api_key", ""))
+            self.send_json({
+                "configured": has_key, 
+                "has_key": has_key,
+                "model": api_config.get("model", DEFAULT_MODEL),
+                "target_lang": api_config.get("target_lang", "zh-Hans")
+            })
+        elif self.path == '/api/proxy/status':
+            self.send_json({"enabled": USE_PROXY})
+        elif self.path == '/api/next':
+            conn = sqlite3.connect(DB_FILE)
+            cur = conn.cursor()
+            rows = cur.execute("SELECT id, file_key, index_id, jp, cn FROM translation_status WHERE is_fixed=0 ORDER BY id").fetchall()
+            conn.close()
+            results = [{"id": r[0], "file": r[1], "index": r[2], "item": {"jp": r[3], "cn": r[4]}} for r in rows]
+            self.send_json({"total": len(results), "items": results})
+        elif self.path.startswith('/api/search?'):
+            import urllib.parse
+            query = urllib.parse.parse_qs(self.path.split('?')[1])
+            keyword = query.get('keyword', [''])[0]
+            search_type = query.get('type', ['all'])[0]
+            conn = sqlite3.connect(DB_FILE)
+            cur = conn.cursor()
+            if search_type == 'jp':
+                rows = cur.execute("SELECT file_key, index_id, jp, cn FROM translation_status WHERE jp LIKE ? LIMIT 100", ('%' + keyword + '%',)).fetchall()
+            elif search_type == 'cn':
+                rows = cur.execute("SELECT file_key, index_id, jp, cn FROM translation_status WHERE cn LIKE ? LIMIT 100", ('%' + keyword + '%',)).fetchall()
+            else:
+                rows = cur.execute("SELECT file_key, index_id, jp, cn FROM translation_status WHERE jp LIKE ? OR cn LIKE ? LIMIT 100", ('%' + keyword + '%', '%' + keyword + '%')).fetchall()
+            conn.close()
+            results = [{"file": r[0], "index": r[1], "item": {"jp": r[2], "cn": r[3]}} for r in rows]
+            self.send_json({"results": results, "total": len(results)})
         else: self.send_error(404)
     
     def do_POST(self):
@@ -206,10 +321,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == '/api/db/init': self.send_json(sync_db())
         elif self.path == '/api/db/backup': self.send_json(backup_db())
         elif self.path == '/api/filter':
-            rules, api_source = data.get("rules", []), data.get("api", "")
-            global DEFAULT_API, issues_list, all_items
-            if api_source: DEFAULT_API = api_source
-            api_source = api_source or DEFAULT_API
+            rules = data.get("rules", [])
             if rules:
                 results = []
                 for entry in all_items:
@@ -217,40 +329,49 @@ class Handler(BaseHTTPRequestHandler):
                     item_issues = [rule for rule in rules if rule in ["cn_empty", "placeholder", "digit_placeholder", "same_content", "low_quality", "length_abnormal"] and check_single_issue(item, rule)]
                     if item_issues: results.append({"file": file_key, "index": idx, "item": item, "issues": item_issues})
                 issues_list = results
-            else: issues_list = [{"file": e["file"], "index": e["index"], "item": e["item"], "issues": []} for e in all_items]
+            else:
+                issues_list = [{"file": e["file"], "index": e["index"], "item": e["item"], "issues": []} for e in all_items]
             self.send_json({"total": len(issues_list), "issues": issues_list})
         elif self.path == '/api/update':
             full_data = load_data()
-            file_key, idx, new_cn = data.get("file"), data.get("index"), data.get("cn")
+            file_key = data.get("file")
+            idx = data.get("index")
+            new_cn = data.get("cn", "")
+            if not file_key or idx is None:
+                self.send_json({"error": "Missing file or index"})
+                return
             if file_key in full_data and idx < len(full_data[file_key]):
                 full_data[file_key][idx]["cn"] = new_cn
                 save_data(full_data)
                 conn = sqlite3.connect(DB_FILE)
                 now = datetime.datetime.now().isoformat()
                 is_translated = 1 if new_cn and new_cn.strip() else 0
-                issue = check_single_issue_type(full_data[file_key][idx])
-                is_fixed = 0 if issue else 1
-                conn.execute("INSERT OR REPLACE INTO translation_status VALUES (?,?,?,?,?,?,?,?)", (None, file_key, idx, new_cn, is_translated, is_fixed, issue, now))
+                is_fixed = 1
+                conn.execute("INSERT OR REPLACE INTO translation_status (file_key, index_id, cn, is_translated, is_fixed, issue_type, updated_at) VALUES (?,?,?,?,?,?,?)", (file_key, idx, new_cn, is_translated, is_fixed, "", now))
                 conn.commit(); conn.close()
                 self.send_json({"success": True})
-            else: self.send_json({"error": "Item not found"})
-        elif self.path == '/api/translate': self.send_json({"translation": translate_with_api(data.get("text", ""), data.get("api", DEFAULT_API))})
-        elif self.path == '/api/token': self.send_json({"success": True})
-        elif self.path == '/api/doubao/config': save_doubao_config(data.get("url", ""), data.get("session", "")); self.send_json({"success": True})
+            else:
+                self.send_json({"error": "Item not found"})
+        elif self.path == '/api/translate': self.send_json({"translation": translate_with_api(data.get("text", ""), data.get("api", DEFAULT_API), data.get("useProxy"), data.get("targetLang"))})
+        elif self.path == '/api/groq/config': save_groq_config(data.get("apiKey", ""), data.get("model", DEFAULT_MODEL), data.get("targetLang", "zh-Hans")); self.send_json({"success": True})
+        elif self.path == '/api/proxy/config': global USE_PROXY; USE_PROXY = data.get("enabled", False); self.send_json({"success": True, "enabled": USE_PROXY})
         else: self.send_error(404)
 
 def run_server(port=None):
     port = port or SERVER_PORT
+    server = HTTPServer(('0.0.0.0', port), Handler)
+    print(f"服务已启动: http://localhost:{port}", flush=True)
+    print("按 Ctrl+C 停止服务", flush=True)
     try:
-        server = HTTPServer(('0.0.0.0', port), Handler)
-        print(f"服务已启动: http://localhost:{port}", flush=True)
         server.serve_forever()
-    except Exception as e: print(f"启动失败: {e}", flush=True)
+    except KeyboardInterrupt:
+        print("\n服务已停止", flush=True)
+        server.shutdown()
 
 if __name__ == "__main__":
     load_config()
     init_db()
-    load_doubao_config()
+    load_groq_config()
     load_all_data()
     port = int(sys.argv[sys.argv.index("--port") + 1]) if "--port" in sys.argv else None
     run_server(port)
