@@ -21,11 +21,13 @@ TRANSLATION_APIS = {
         "name": "Groq API (推荐)",
         "url": "https://api.groq.com/openai/v1",
         "model": "llama-3.1-8b-instant",
-        "target_lang": "zh-Hans"
+        "target_lang": "zh-Hans",
+        "system_title": "Love escalator 翻译质量检查工具"
     }
 }
 DEFAULT_API = "groq"
 DEFAULT_MODEL = "llama-3.3-70b-versatile"
+SYSTEM_TITLE = "Love escalator 翻译质量检查工具"
 
 LANG_MAP = {
     "en": "English",
@@ -51,9 +53,13 @@ TRANSLATION_APIS = {
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     conn.execute('''CREATE TABLE IF NOT EXISTS translation_status (id INTEGER PRIMARY KEY, file_key TEXT, index_id INTEGER, jp TEXT, cn TEXT, is_translated INTEGER DEFAULT 0, is_fixed INTEGER DEFAULT 0, issue_type TEXT, ai_suggestion TEXT, created_at TEXT, updated_at TEXT, UNIQUE(file_key, index_id))''')
-    conn.execute('''CREATE TABLE IF NOT EXISTS groq_config (id INTEGER PRIMARY KEY CHECK (id=1), api_key TEXT, model TEXT DEFAULT 'llama-3.3-70b-versatile', target_lang TEXT DEFAULT 'zh-Hans', updated_at TEXT)''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS groq_config (id INTEGER PRIMARY KEY CHECK (id=1), api_key TEXT, model TEXT DEFAULT 'llama-3.3-70b-versatile', target_lang TEXT DEFAULT 'zh-Hans', updated_at TEXT, system_title TEXT DEFAULT 'Love escalator 翻译质量检查工具')''')
     try:
         conn.execute("ALTER TABLE groq_config ADD COLUMN target_lang TEXT DEFAULT 'zh-Hans'")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE groq_config ADD COLUMN system_title TEXT DEFAULT '翻译质量检查工具'")
     except sqlite3.OperationalError:
         pass
     conn.commit(); conn.close()
@@ -64,11 +70,11 @@ def load_groq_config():
     try:
         conn = sqlite3.connect(DB_FILE)
         try:
-            row = conn.cursor().execute("SELECT api_key, model, target_lang FROM groq_config WHERE id=1").fetchone()
+            row = conn.cursor().execute("SELECT api_key, model, target_lang, system_title FROM groq_config WHERE id=1").fetchone()
         except sqlite3.OperationalError:
             row = conn.cursor().execute("SELECT api_key, model FROM groq_config WHERE id=1").fetchone()
             if row:
-                row = (row[0], row[1], "zh-Hans")
+                row = (row[0], row[1], "zh-Hans", "Love escalator 翻译质量检查工具")
         finally:
             conn.close()
     except Exception:
@@ -77,18 +83,23 @@ def load_groq_config():
         TRANSLATION_APIS["groq"]["api_key"] = row[0] or ""
         TRANSLATION_APIS["groq"]["model"] = row[1] or DEFAULT_MODEL
         TRANSLATION_APIS["groq"]["target_lang"] = row[2] if len(row) > 2 else "zh-Hans"
+        if len(row) > 3:
+            TRANSLATION_APIS["groq"]["system_title"] = row[3]
 
-def save_groq_config(api_key, model, target_lang="zh-Hans"):
+SYSTEM_TITLE = TRANSLATION_APIS["groq"].get("system_title", "Love escalator 翻译质量检查工具")
+
+def save_groq_config(api_key, model, target_lang="zh-Hans", system_title="Love escalator 翻译质量检查工具"):
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
     if api_key == "(已有)":
         old = cur.execute("SELECT api_key FROM groq_config WHERE id=1").fetchone()
         api_key = old[0] if old else ""
-    cur.execute("INSERT OR REPLACE INTO groq_config VALUES(1,?,?,?,?)", (api_key, model, target_lang, datetime.datetime.now().isoformat()))
+    cur.execute("INSERT OR REPLACE INTO groq_config VALUES(1,?,?,?,?,?)", (api_key, model, target_lang, datetime.datetime.now().isoformat(), system_title))
     conn.commit(); conn.close()
     TRANSLATION_APIS["groq"]["api_key"] = api_key
     TRANSLATION_APIS["groq"]["model"] = model
     TRANSLATION_APIS["groq"]["target_lang"] = target_lang
+    TRANSLATION_APIS["groq"]["system_title"] = system_title
 
 def load_config():
     global DATA_FILE, CONFIG_FILE, SERVER_PORT, LENGTH_RATIO_MIN, LENGTH_RATIO_MAX, CHECK_RULES, DB_FILE
@@ -138,7 +149,7 @@ def sync_db():
                 cur.execute("UPDATE translation_status SET jp=?, cn=?, is_translated=?, is_fixed=? WHERE file_key=? AND index_id=?", (jp, cn, is_translated, is_fixed, file_key, idx))
                 updated += 1
             else:
-                cur.execute("INSERT INTO translation_status VALUES (?,?,?,?,?,?,?,?,?,?)", (None, file_key, idx, jp, cn, is_translated, is_fixed, "", now, now))
+                cur.execute("INSERT INTO translation_status (file_key, index_id, jp, cn, is_translated, is_fixed, issue_type, ai_suggestion, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)", (file_key, idx, jp, cn, is_translated, is_fixed, "", "", now, now))
                 inserted += 1
     conn.commit(); conn.close()
     return {"inserted": inserted, "updated": updated}
@@ -245,7 +256,14 @@ def load_template():
     with open(os.path.join(script_dir, 'templates', 'index.html'), 'r', encoding='utf-8') as f:
         return f.read()
 
-HTML_TEMPLATE = load_template()
+HTML_TEMPLATE = load_template().replace('content="20240416"', 'content="' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '"').replace('翻译质量检查工具', '{{SYSTEM_TITLE}}')
+
+def load_settings_template():
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(script_dir, 'templates', 'settings.html'), 'r', encoding='utf-8') as f:
+        return f.read()
+
+SETTINGS_TEMPLATE = load_settings_template().replace('content="20240416"', 'content="' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '"').replace('翻译质量检查工具', '{{SYSTEM_TITLE}}')
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args): pass
@@ -256,6 +274,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(data).encode('utf-8'))
     
     def do_GET(self):
+        global SYSTEM_TITLE
         if self.path == '/':
             self.send_response(200)
             self.send_header('Content-Type', 'text/html; charset=utf-8')
@@ -263,10 +282,23 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Pragma', 'no-cache')
             self.send_header('Expires', '0')
             self.end_headers()
-            self.wfile.write(HTML_TEMPLATE.encode('utf-8'))
+            self.wfile.write(HTML_TEMPLATE.replace('{{SYSTEM_TITLE}}', SYSTEM_TITLE).encode('utf-8'))
+        elif self.path == '/settings.html':
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(SETTINGS_TEMPLATE.replace('{{SYSTEM_TITLE}}', SYSTEM_TITLE).encode('utf-8'))
         elif self.path == '/tutorial.html':
             script_dir = os.path.dirname(os.path.abspath(__file__))
             with open(os.path.join(script_dir, 'templates', 'tutorial.html'), 'r', encoding='utf-8') as f:
+                content = f.read()
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(content.encode('utf-8'))
+        elif self.path == '/settings.html':
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            with open(os.path.join(script_dir, 'templates', 'settings.html'), 'r', encoding='utf-8') as f:
                 content = f.read()
             self.send_response(200)
             self.send_header('Content-Type', 'text/html; charset=utf-8')
@@ -284,14 +316,30 @@ class Handler(BaseHTTPRequestHandler):
                 "configured": has_key, 
                 "has_key": has_key,
                 "model": api_config.get("model", DEFAULT_MODEL),
-                "target_lang": api_config.get("target_lang", "zh-Hans")
+                "target_lang": api_config.get("target_lang", "zh-Hans"),
+                "system_title": api_config.get("system_title", "翻译质量检查工具")
             })
         elif self.path == '/api/proxy/status':
             self.send_json({"enabled": USE_PROXY})
-        elif self.path == '/api/next':
+        elif self.path.startswith('/api/next'):
+            import urllib.parse
+            query = urllib.parse.parse_qs(self.path.split('?')[1] if '?' in self.path else '')
+            show_fixed = query.get('show_fixed', ['0'])[0]
+            filter_long_cn = query.get('filter_long_cn', ['0'])[0]
             conn = sqlite3.connect(DB_FILE)
             cur = conn.cursor()
-            rows = cur.execute("SELECT id, file_key, index_id, jp, cn FROM translation_status WHERE is_fixed=0 ORDER BY id").fetchall()
+            if show_fixed == '1':
+                sql = "SELECT id, file_key, index_id, jp, cn FROM translation_status"
+                if filter_long_cn == '1':
+                    sql += " WHERE LENGTH(cn) > LENGTH(jp)"
+                sql += " ORDER BY id"
+                rows = cur.execute(sql).fetchall()
+            else:
+                sql = "SELECT id, file_key, index_id, jp, cn FROM translation_status WHERE is_fixed=0"
+                if filter_long_cn == '1':
+                    sql += " AND LENGTH(cn) > LENGTH(jp)"
+                sql += " ORDER BY id"
+                rows = cur.execute(sql).fetchall()
             conn.close()
             results = [{"id": r[0], "file": r[1], "index": r[2], "item": {"jp": r[3], "cn": r[4]}} for r in rows]
             self.send_json({"total": len(results), "items": results})
@@ -353,7 +401,11 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.send_json({"error": "Item not found"})
         elif self.path == '/api/translate': self.send_json({"translation": translate_with_api(data.get("text", ""), data.get("api", DEFAULT_API), data.get("useProxy"), data.get("targetLang"))})
-        elif self.path == '/api/groq/config': save_groq_config(data.get("apiKey", ""), data.get("model", DEFAULT_MODEL), data.get("targetLang", "zh-Hans")); self.send_json({"success": True})
+        elif self.path == '/api/groq/config': 
+            save_groq_config(data.get("apiKey", ""), data.get("model", DEFAULT_MODEL), data.get("targetLang", "zh-Hans"), data.get("systemTitle", "翻译质量检查工具")); 
+            global SYSTEM_TITLE
+            SYSTEM_TITLE = data.get("systemTitle", "翻译质量检查工具")
+            self.send_json({"success": True})
         elif self.path == '/api/proxy/config': global USE_PROXY; USE_PROXY = data.get("enabled", False); self.send_json({"success": True, "enabled": USE_PROXY})
         else: self.send_error(404)
 

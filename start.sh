@@ -90,6 +90,13 @@ start_server() {
     exec python3 check_translation.py --port $PORT
 }
 
+kill_server() {
+    echo "正在杀死进程..."
+    pkill -f "check_translation.py" 2>/dev/null
+    sleep 1
+    echo "✓ 进程已终止"
+}
+
 show_status() {
     echo ""
     echo "状态检查:"
@@ -139,6 +146,7 @@ show_menu() {
     echo "1. 启动服务"
     echo "2. 安装依赖"
     echo "3. 初始化数据库"
+    echo "9. 杀死进程"
     echo "0. 退出"
     echo ""
     echo -n "请选择: "
@@ -152,6 +160,7 @@ while true; do
         1) start_server ;;
         2) install_deps; echo ""; read -p "按回车继续..." ;;
         3) init_db; echo ""; read -p "按回车继续..." ;;
+        9) kill_server; echo ""; read -p "按回车继续..." ;;
         0) exit 0 ;;
         *) echo "无效选择"; sleep 1 ;;
     esac

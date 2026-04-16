@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="version" content="20240416">
+    <title>设置 - 翻译质量检查工具</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+        .container { max-width: 600px; margin: 0 auto; }
+        h1 { color: #333; }
+        .back-link { display: inline-block; margin-bottom: 20px; padding: 10px 20px; background: #9b59b6; color: #fff; text-decoration: none; border-radius: 4px; }
+        .back-link:hover { opacity: 0.9; }
+        .settings { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .settings h3 { margin-top: 0; }
+        .config-row { display: flex; gap: 10px; margin-bottom: 15px; align-items: center; flex-wrap: wrap; }
+        .config-row label { min-width: 100px; }
+        .config-row input, .config-row select { padding: 8px; font-size: 14px; }
+        .config-row input[type="password"] { width: 300px; }
+        .api-status { font-size: 12px; padding: 5px 10px; border-radius: 4px; }
+        .api-status.ok { background: #d4edda; color: #155724; }
+        .api-status.warn { background: #fff3cd; color: #856404; }
+        .btn { padding: 10px 20px; background: #27ae60; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+        .btn:hover { opacity: 0.9; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/" class="back-link">← 返回主页面</a>
+        <h1>设置</h1>
+        
+        <div class="settings">
+            <h3>基本设置</h3>
+            <div class="config-row">
+                <label>系统标题:</label>
+                <input type="text" id="system-title" placeholder="Love escalator 翻译质量检查工具" style="width:200px;">
+                <button class="btn" onclick="saveSystemTitle()">确认</button>
+            </div>
+        </div>
+        
+        <div class="settings">
+            <h3>Groq API 配置</h3>
+            <div class="config-row">
+                <label>API Key:</label>
+                <input type="password" id="groq-api-key" placeholder="gsk_xxxxxxxxxxxx">
+            </div>
+            <div class="config-row">
+                <label>模型:</label>
+                <select id="groq-model" style="width:200px;">
+                    <option value="llama-3.3-70b-versatile" selected>llama-3.3-70b-versatile (高质量)</option>
+                    <option value="llama-3.1-8b-instant">llama-3.1-8b-instant (快速)</option>
+                </select>
+            </div>
+            <div class="config-row">
+                <label>代理:</label>
+                <label><input type="checkbox" id="use-proxy"> 使用代理 (socks5://127.0.0.1:10808)</label>
+                <span id="proxy-status" style="font-size:12px;color:#666;"></span>
+            </div>
+            <div class="config-row">
+                <label>目标语言:</label>
+                <select id="target-lang">
+                    <option value="en">english</option>
+                    <option value="fr">français</option>
+                    <option value="de">deutsch</option>
+                    <option value="es">español</option>
+                    <option value="pt">português</option>
+                    <option value="ja">日本語</option>
+                    <option value="ko">한국어</option>
+                    <option value="zh-Hant">繁體中文</option>
+                    <option value="zh-Hans" selected>简体中文</option>
+                </select>
+            </div>
+            <div class="config-row" style="margin-top:15px;">
+                <button class="btn" onclick="saveSettings()">保存设置</button>
+                <span id="api-status" class="api-status warn">⚠ 请配置API Key</span>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let useProxy = false;
+        let savedApiKey = null;
+        
+        async function init() {
+            await checkGroqStatus();
+            await loadProxyStatus();
+            await loadSettings();
+            await loadSystemTitle();
+        }
+        
+        async function loadSystemTitle() {
+            const resp = await fetch('/api/groq/status');
+            const data = await resp.json();
+            if (data.system_title) {
+                document.getElementById('system-title').value = data.system_title;
+            }
+        }
+        
+        async function saveSystemTitle() {
+            const title = document.getElementById('system-title').value || '翻译质量检查工具';
+            const apiKeyInput = document.getElementById('groq-api-key');
+            const model = document.getElementById('groq-model').value;
+            const targetLang = document.getElementById('target-lang').value;
+            const useProxy = document.getElementById('use-proxy').checked;
+            let apiKey = apiKeyInput.value;
+            if (!apiKey && savedApiKey) {
+                apiKey = savedApiKey;
+            }
+            const resp = await fetch('/api/groq/config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({apiKey, model, targetLang, systemTitle: title})
+            });
+            const result = await resp.json();
+            
+            if (result.success) {
+                alert('系统标题已保存！');
+            }
+        }
+        
+        async function loadSettings() {
+            const resp = await fetch('/api/groq/status');
+            const data = await resp.json();
+            if (data.model) {
+                document.getElementById('groq-model').value = data.model;
+            }
+            if (data.target_lang) {
+                document.getElementById('target-lang').value = data.target_lang;
+            }
+        }
+        
+        async function checkGroqStatus() {
+            const resp = await fetch('/api/groq/status');
+            const data = await resp.json();
+            const statusEl = document.getElementById('api-status');
+            if (data.configured) {
+                statusEl.className = 'api-status ok';
+                statusEl.textContent = '✓ 已配置';
+                savedApiKey = data.has_key ? '(已有)' : null;
+            } else {
+                statusEl.className = 'api-status warn';
+                statusEl.textContent = '⚠ 请配置API Key';
+                savedApiKey = null;
+            }
+        }
+        
+        async function loadProxyStatus() {
+            const resp = await fetch('/api/proxy/status');
+            const data = await resp.json();
+            useProxy = data.enabled;
+            document.getElementById('use-proxy').checked = useProxy;
+            updateProxyStatus();
+        }
+        
+        function updateProxyStatus() {
+            const statusEl = document.getElementById('proxy-status');
+            if (useProxy) {
+                statusEl.textContent = '✓ 代理已启用';
+                statusEl.style.color = '#27ae60';
+            } else {
+                statusEl.textContent = '⚠ 直连（可能无法访问）';
+                statusEl.style.color = '#e74c3c';
+            }
+        }
+        
+        async function saveSettings() {
+            const apiKeyInput = document.getElementById('groq-api-key');
+            const model = document.getElementById('groq-model').value;
+            const targetLang = document.getElementById('target-lang').value;
+            const useProxy = document.getElementById('use-proxy').checked;
+            let apiKey = apiKeyInput.value;
+            if (!apiKey && savedApiKey) {
+                apiKey = savedApiKey;
+            }
+            const resp = await fetch('/api/groq/config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({apiKey, model, targetLang})
+            });
+            const result = await resp.json();
+            
+            const proxyResp = await fetch('/api/proxy/config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({enabled: useProxy})
+            });
+            
+            if (result.success) {
+                await checkGroqStatus();
+                await loadSettings();
+                alert('设置已保存！');
+            }
+        }
+        
+        init();
+    </script>
+</body>
+</html>

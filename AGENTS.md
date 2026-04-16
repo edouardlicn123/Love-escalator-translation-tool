@@ -66,6 +66,31 @@ Love-escalator-translation-tool/
 python3 check_translation.py --port 5382
 ```
 
+### 服务器重启步骤
+
+1. **查找并杀掉旧进程**
+   ```bash
+   pkill -f "check_translation.py" || kill $(lsof -ti:5382) 2>/dev/null
+   sleep 1
+   ```
+
+2. **启动新进程**
+   ```bash
+   nohup python3 check_translation.py --port 5382 > /tmp/server.log 2>&1 &
+   sleep 3
+   ```
+
+3. **验证服务**
+   ```bash
+   curl -s "http://127.0.0.1:5382/api/db/stats"
+   ```
+
+### 后端路径匹配规则
+
+- 使用 `startswith()` 匹配带 query string 的路径
+- **错误**：`if self.path == '/api/next':` （无法匹配 `/api/next?show_fixed=1`）
+- **正确**：`if self.path.startswith('/api/next'):`
+
 ## 数据字段含义
 
 | 字段 | 触发条件 |

@@ -5,6 +5,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
+    <meta name="version" content="20240416">
     <title>翻译质量检查工具</title>
     <style>
         * { box-sizing: border-box; }
@@ -37,6 +38,13 @@
         .stat-box .label { color: #666; font-size: 14px; }
         .main-content { display: flex; gap: 15px; margin-bottom: 20px; }
         .sidebar { width: 180px; flex-shrink: 0; }
+        .list-panel { width: 120px; flex-shrink: 0; height: 500px; overflow-y: auto; background: #fff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .list-panel .header { position: sticky; top: 0; background: #f0f0f0; padding: 8px; font-weight: bold; font-size: 12px; display: flex; }
+        .list-panel .col-id { width: 50px; }
+        .list-panel .col-jp { width: 70px; }
+        .list-panel .row { display: flex; padding: 5px 8px; border-bottom: 1px solid #eee; cursor: pointer; font-size: 12px; }
+        .list-panel .row:hover { background: #e8f4fc; }
+        .list-panel .row.active { background: #3498db; color: #fff; }
         .translation-area { flex: 1; }
         .jump-box { background: #fff; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 10px; }
         .jump-box .label { font-weight: bold; font-size: 12px; color: #666; margin-bottom: 8px; }
@@ -82,47 +90,10 @@
         <div class="toolbar">
             <button onclick="initDb()">建立数据库</button>
             <button onclick="backupDb()">备份数据库</button>
+            <a href="/settings.html" class="btn" style="background: #3498db;">⚙ 设置</a>
             <a href="/tutorial.html" target="_blank" class="btn" style="background: #e67e22; text-decoration: none;">📖 查看教程</a>
         </div>
         
-        <div class="settings">
-            <h3>设置</h3>
-            <div class="config-row">
-                <label>API Key:</label>
-                <input type="password" id="groq-api-key" placeholder="gsk_xxxxxxxxxxxx">
-            </div>
-            <div class="config-row">
-                <label>模型:</label>
-                <select id="groq-model" style="width:200px;">
-                    <option value="llama-3.3-70b-versatile" selected>llama-3.3-70b-versatile (高质量)</option>
-                    <option value="llama-3.1-8b-instant">llama-3.1-8b-instant (快速)</option>
-                </select>
-            </div>
-            <div class="config-row">
-                <label>代理:</label>
-                <label><input type="checkbox" id="use-proxy"> 使用代理 (socks5://127.0.0.1:10808)</label>
-                <span id="proxy-status" style="font-size:12px;color:#666;"></span>
-            </div>
-            <div class="config-row">
-                <label>目标语言:</label>
-                <select id="target-lang">
-                    <option value="en">english</option>
-                    <option value="fr">français</option>
-                    <option value="de">deutsch</option>
-                    <option value="es">español</option>
-                    <option value="pt">português</option>
-                    <option value="ja">日本語</option>
-                    <option value="ko">한국어</option>
-                    <option value="zh-Hant">繁體中文</option>
-                    <option value="zh-Hans" selected>简体中文</option>
-                </select>
-            </div>
-            <div class="config-row" style="margin-top:15px;">
-                <button class="btn btn-green" onclick="saveSettings()">保存设置</button>
-                <span id="api-status" class="api-status warn">⚠ 请配置API Key</span>
-            </div>
-        </div>
-
         <div class="db-status" id="db-status">
             加载中...
         </div>
@@ -139,9 +110,23 @@
                     <input type="text" id="search-input" placeholder="搜索原文或翻译" onkeydown="if(event.key==='Enter')nextSearch()">
                     <button onclick="nextSearch()">搜索</button>
                 </div>
-            </div>
-            
-            <div class="translation-area">
+                <div class="search-box" style="margin-top: 10px;">
+                    <div class="label">过滤</div>
+                    <label><input type="checkbox" id="show-fixed"> 显示已确认</label>
+                    <label style="margin-top:8px;display:block;"><input type="checkbox" id="filter-long-cn"> 翻译过长</label>
+                    <button onclick="applyFilter()" style="width:100%;margin-top:8px;padding:6px;background:#3498db;color:#fff;border:none;border-radius:4px;cursor:pointer;">确认</button>
+                </div>
+</div>
+             
+             <div class="list-panel">
+                 <div class="header">
+                     <div class="col-id">ID</div>
+                     <div class="col-jp">原文</div>
+                 </div>
+                 <div id="issue-list"></div>
+             </div>
+             
+             <div class="translation-area">
                 <div id="issues-list"></div>
             </div>
         </div>
@@ -158,21 +143,69 @@
         let allItems = [];
         let useProxy = false;
         let savedApiKey = null;
+        let showAll = false;
+        let filterLongCn = false;
+        let currentJpText = '';
         
         async function init() {
             await loadDbStatus();
-            allItems = (await fetch('/api/all').then(r => r.json())).items;
-            await checkGroqStatus();
-            await loadProxyStatus();
-            await loadSettings();
-            const resp = await fetch('/api/next');
+            await loadIssues();
+        }
+        
+        async function loadIssues() {
+            let url = '/api/next';
+            if (showAll) url += '?show_fixed=1';
+            if (filterLongCn) {
+                url += url.includes('?') ? '&filter_long_cn=1' : '?filter_long_cn=1';
+            }
+            const resp = await fetch(url);
             const data = await resp.json();
             issues = data.items || [];
             currentIdx = 0;
+            renderList();
             if (issues.length > 0) {
                 renderItem();
             } else {
-                document.getElementById('issues-list').innerHTML = '<p>全部翻译已确认完成！</p>';
+                const msg = showAll ? '暂无记录' : '全部翻译已确认完成！';
+                document.getElementById('issues-list').innerHTML = '<p>' + msg + '</p>';
+            }
+        }
+        
+        function renderList() {
+            const listEl = document.getElementById('issue-list');
+            listEl.innerHTML = issues.map((issue, idx) => {
+                const jp = issue.item.jp || '';
+                const jpShort = jp.length > 4 ? jp.substring(0, 4) + '...' : jp;
+                const active = idx === currentIdx ? 'active' : '';
+                return `<div class="row ${active}" onclick="clickListItem(${idx})"><div class="col-id">${String(issue.id).padStart(6, '0')}</div><div class="col-jp">${jpShort}</div></div>`;
+            }).join('');
+        }
+        
+        function clickListItem(idx) {
+            currentIdx = idx;
+            renderList();
+            renderItem();
+        }
+        
+        function applyFilter() {
+            const wasShowAll = showAll;
+            showAll = document.getElementById('show-fixed').checked;
+            filterLongCn = document.getElementById('filter-long-cn').checked;
+            
+            const currentId = issues[currentIdx]?.id;
+            
+            if (!wasShowAll && showAll && currentId) {
+                let url = '/api/next?show_fixed=1';
+                if (filterLongCn) url += '&filter_long_cn=1';
+                fetch(url).then(r => r.json()).then(data => {
+                    issues = data.items || [];
+                    const newIdx = issues.findIndex(i => i.id === currentId);
+                    currentIdx = newIdx >= 0 ? newIdx : 0;
+                    renderList();
+                    renderItem();
+                });
+            } else {
+                loadIssues();
             }
         }
         
@@ -300,7 +333,8 @@
         
         function renderItem() {
             if (issues.length === 0) {
-                document.getElementById('issues-list').innerHTML = '<p>全部翻译已确认完成！</p>';
+                const msg = showAll ? '暂无记录' : '全部翻译已确认完成！';
+                document.getElementById('issues-list').innerHTML = '<p>' + msg + '</p>';
                 return;
             }
             if (currentIdx >= issues.length) {
@@ -309,10 +343,10 @@
             const issue = issues[currentIdx];
             const item = issue.item;
             const currentCn = item.cn || '';
+            currentJpText = item.jp || '';
             document.getElementById('issues-list').innerHTML = `
                 <div class="issue-item">
                     <div class="meta">ID: ${issue.id} | 文件: ${issue.file} | 索引: ${issue.index}</div>
-                    <div class="progress">进度: ${currentIdx + 1} / ${issues.length}</div>
                     <div class="label">原文 (jp):</div>
                     <div class="jp">${item.jp || '(空)'}</div>
                     
@@ -321,7 +355,7 @@
                         <div class="option-content" id="current-cn">${currentCn || '(空)'}</div>
                     </div>
                     
-                    <div class="label">选项 B - AI建议: <button class="btn-small" onclick="copyToEditor('ai')">📋复制</button> <span id="ai-loading" style="font-size:12px;color:#999;"></span></div>
+                    <div class="label">选项 B - AI建议: <button class="btn-small" onclick="refreshAISuggestion()">🔄刷新</button> <button class="btn-small" onclick="copyToEditor('ai')">📋复制</button> <span id="ai-loading" style="font-size:12px;color:#999;"></span></div>
                     <div class="option-content" id="ai-suggestion">(加载中...)</div>
                     
                     <div class="label">编辑区:</div>
@@ -333,26 +367,12 @@
                         <button class="btn-save" onclick="saveAndNext()">保存→跳转</button>
                     </div>
                 </div>
-            `;
-            loadAISuggestion(item.jp);
+`;
+            loadAISuggestion(currentJpText);
         }
         
-        function copyToEditor(source) {
-            const editor = document.getElementById('editor-textarea');
-            if (source === 'current') {
-                editor.value = document.getElementById('current-cn').textContent || '';
-            } else if (source === 'ai') {
-                editor.value = document.getElementById('ai-suggestion').textContent || '';
-            }
-        }
-        
-        function copyFromEditor() {
-            const textarea = document.getElementById('editor-textarea');
-            textarea.select();
-            document.execCommand('copy');
-            const btn = document.querySelector('.btn-copy');
-            btn.textContent = '✓已复制';
-            setTimeout(() => btn.textContent = '📋复制', 2000);
+        function refreshAISuggestion() {
+            loadAISuggestion(currentJpText);
         }
         
         async function loadAISuggestion(text) {
@@ -383,6 +403,15 @@
             loadingEl.textContent = '';
         }
         
+        function copyToEditor(source) {
+            const editor = document.getElementById('editor-textarea');
+            if (source === 'current') {
+                editor.value = document.getElementById('current-cn').textContent || '';
+            } else if (source === 'ai') {
+                editor.value = document.getElementById('ai-suggestion').textContent || '';
+            }
+        }
+        
         async function saveAndReload(cn) {
             const issue = issues[currentIdx];
             const resp = await fetch('/api/update', {
@@ -393,18 +422,7 @@
             const data = await resp.json();
             if (data.success) {
                 await loadDbStatus();
-                const nextResp = await fetch('/api/next');
-                const nextData = await nextResp.json();
-                issues = nextData.items || [];
-                if (issues.length === 0) {
-                    document.getElementById('issues-list').innerHTML = '<p>全部翻译已确认完成！</p>';
-                    currentIdx = 0;
-                } else if (currentIdx >= issues.length) {
-                    currentIdx = issues.length - 1;
-                    renderItem();
-                } else {
-                    renderItem();
-                }
+                await loadIssues();
             }
         }
         
@@ -428,9 +446,7 @@
                 currentIdx++; 
                 renderItem(); 
             } else {
-                const resp = await fetch('/api/next');
-                const data = await resp.json();
-                issues = data.items || [];
+                await loadIssues();
                 if (issues.length > 0) {
                     currentIdx = 0;
                     renderItem();
