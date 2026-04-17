@@ -5,7 +5,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <meta name="version" content="20240416">
+    <meta name="version" content="20260417">
     <title>翻译质量检查工具</title>
     <style>
         * { box-sizing: border-box; }
@@ -15,8 +15,6 @@
         .toolbar { display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap; }
         .toolbar button, .btn { padding: 10px 20px; background: #9b59b6; color: #fff; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; }
         .toolbar button:hover, .btn:hover { opacity: 0.9; }
-        .btn-green { background: #27ae60; }
-        .btn-orange { background: #e67e22; }
         .settings { background: #fff; padding: 20px; margin-bottom: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         .settings h3 { margin-top: 0; }
         .filter-group { display: flex; flex-wrap: wrap; gap: 15px; margin-bottom: 15px; }
@@ -32,10 +30,6 @@
         .db-status { background: #fff; padding: 10px 15px; margin-bottom: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         .db-status .stat { display: inline-block; margin-right: 20px; }
         .db-status .stat-num { font-weight: bold; color: #3498db; }
-        .stats { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
-        .stat-box { background: #fff; padding: 15px 25px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        .stat-box .num { font-size: 24px; font-weight: bold; color: #e74c3c; }
-        .stat-box .label { color: #666; font-size: 14px; }
         .main-content { display: flex; gap: 15px; margin-bottom: 20px; }
         .sidebar { width: 180px; flex-shrink: 0; }
         .list-panel { width: 120px; flex-shrink: 0; height: 500px; overflow-y: auto; background: #fff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
@@ -81,8 +75,8 @@
         .nav { position: fixed; bottom: 20px; right: 20px; display: flex; gap: 10px; z-index: 1000; }
         .nav button { padding: 15px 25px; background: #2ecc71; color: #fff; border: none; border-radius: 8px; cursor: pointer; box-shadow: 0 4px 8px rgba(0,0,0,0.2); }
         .nav button:hover { background: #27ae60; }
-        .progress { color: #666; font-size: 14px; }
         .error { color: #e74c3c; }
+        .option-content.error { background: #fdecea; border-left-color: #e74c3c; }
     </style>
 </head>
 <body>
@@ -140,20 +134,51 @@
     </div>
     
     <script>
-        let currentIdx = 0;
-        let issues = [];
-        let allItems = [];
-        let useProxy = false;
-        let savedApiKey = null;
-        let showAll = false;
-        let filterLongCn = false;
-        let currentJpText = '';
+        const state = {
+            currentIdx: 0,
+            issues: [],
+            useProxy: false,
+            savedApiKey: null,
+            showAll: false,
+            filterLongCn: false,
+            currentJpText: '',
+            searchResults: [],
+            searchIdx: 0
+        };
         
-        // 获取带过滤条件的URL路径
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+        
+        async function fetchWithTimeout(url, options = {}, timeout = 5000) {
+            const controller = new AbortController();
+            const id = setTimeout(() => controller.abort(), timeout);
+            try {
+                const resp = await fetch(url, {...options, signal: controller.signal});
+                clearTimeout(id);
+                return resp;
+            } catch (e) {
+                clearTimeout(id);
+                if (e.name === 'AbortError') {
+                    throw new Error('请求超时');
+                }
+                throw e;
+            }
+        }
+        
+        function updateCharCount() {
+            const textarea = document.getElementById('editor-textarea');
+            const countEl = document.getElementById('char-count');
+            if (textarea && countEl && textarea.value) {
+                countEl.textContent = '字数: ' + textarea.value.length;
+            }
+        }
+
         function getFilteredApiPath(basePath) {
             let path = basePath;
-            if (showAll) path += '?show_fixed=1';
-            if (filterLongCn) path += showAll ? '&filter_long_cn=1' : '?filter_long_cn=1';
+            if (state.showAll) path += '?show_fixed=1';
+            if (state.filterLongCn) path += state.showAll ? '&filter_long_cn=1' : '?filter_long_cn=1';
             return path;
         }
         
@@ -163,36 +188,32 @@
         }
         
         async function loadIssues() {
-            let url = '/api/next';
-            if (showAll) url += '?show_fixed=1';
-            if (filterLongCn) {
-                url += url.includes('?') ? '&filter_long_cn=1' : '?filter_long_cn=1';
-            }
-            console.log('loadIssues: url=', url);
-            const resp = await fetch(url);
-            const data = await resp.json();
-            console.log('loadIssues: got', data.total, 'items');
-            issues = data.items || [];
-            currentIdx = 0;
-            renderList();
-            if (issues.length > 0) {
-                renderItem();
-            } else {
-                const msg = showAll ? '暂无记录' : '全部翻译已确认完成！';
-                document.getElementById('issues-list').innerHTML = '<p>' + msg + '</p>';
+            try {
+                const resp = await fetch(getFilteredApiPath('/api/next'));
+                const data = await resp.json();
+                state.issues = data.items || [];
+                state.currentIdx = 0;
+                renderList();
+                if (state.issues.length > 0) {
+                    renderItem();
+                } else {
+                    const msg = state.showAll ? '暂无记录' : '全部翻译已确认完成！';
+                    document.getElementById('issues-list').innerHTML = '<p>' + msg + '</p>';
+                }
+            } catch (e) {
+                console.error('加载数据失败:', e);
             }
         }
         
         function renderList() {
             const listEl = document.getElementById('issue-list');
-            listEl.innerHTML = issues.map((issue, idx) => {
+            listEl.innerHTML = state.issues.map((issue, idx) => {
                 const jp = issue.item.jp || '';
                 const jpShort = jp.length > 4 ? jp.substring(0, 4) + '...' : jp;
-                const active = idx === currentIdx ? 'active' : '';
-                return `<div class="row ${active}" onclick="clickListItem(${idx})"><div class="col-id">${String(issue.id).padStart(6, '0')}</div><div class="col-jp">${jpShort}</div></div>`;
+                const active = idx === state.currentIdx ? 'active' : '';
+                return `<div class="row ${active}" onclick="clickListItem(${idx})"><div class="col-id">${String(issue.id).padStart(6, '0')}</div><div class="col-jp">${escapeHtml(jpShort)}</div></div>`;
             }).join('');
             
-            // 自动滚动到当前行
             setTimeout(() => {
                 const activeRow = listEl.querySelector('.row.active');
                 if (activeRow) {
@@ -202,72 +223,74 @@
         }
         
         function clickListItem(idx) {
-            currentIdx = idx;
+            state.currentIdx = idx;
             renderList();
             renderItem();
         }
         
         function applyFilter() {
-            const currentId = issues[currentIdx]?.id;
-            console.log('applyFilter: currentId=', currentId, 'currentIdx=', currentIdx);
-            showAll = document.getElementById('show-fixed').checked;
-            filterLongCn = document.getElementById('filter-long-cn').checked;
+            const currentId = state.issues[state.currentIdx]?.id;
+            state.showAll = document.getElementById('show-fixed').checked;
+            state.filterLongCn = document.getElementById('filter-long-cn').checked;
             
-            let url = '/api/next';
-            if (showAll) url += '?show_fixed=1';
-            if (filterLongCn) url += showAll ? '&filter_long_cn=1' : '?filter_long_cn=1';
-            console.log('applyFilter: url=', url);
-            
-            fetch(url).then(r => r.json()).then(data => {
-                issues = data.items || [];
-                console.log('applyFilter: got issues length=', issues.length);
-                console.log('applyFilter: looking for id=', currentId);
-                const newIdx = currentId ? issues.findIndex(i => i.id === currentId) : -1;
-                console.log('applyFilter: newIdx=', newIdx);
-                currentIdx = newIdx >= 0 ? newIdx : 0;
-                console.log('applyFilter: set currentIdx=', currentIdx);
+            fetch(getFilteredApiPath('/api/next')).then(r => r.json()).then(data => {
+                state.issues = data.items || [];
+                const newIdx = currentId ? state.issues.findIndex(i => i.id === currentId) : -1;
+                state.currentIdx = newIdx >= 0 ? newIdx : 0;
                 renderList();
                 renderItem();
-            });
+            }).catch(e => console.error('过滤失败:', e));
         }
         
         async function loadSettings() {
-            const resp = await fetch('/api/groq/status');
-            const data = await resp.json();
-            if (data.model) {
-                document.getElementById('groq-model').value = data.model;
-            }
-            if (data.target_lang) {
-                document.getElementById('target-lang').value = data.target_lang;
+            try {
+                const resp = await fetch('/api/groq/status');
+                const data = await resp.json();
+                if (data.model) {
+                    document.getElementById('groq-model').value = data.model;
+                }
+                if (data.target_lang) {
+                    document.getElementById('target-lang').value = data.target_lang;
+                }
+            } catch (e) {
+                console.error('加载设置失败:', e);
             }
         }
         
         async function checkGroqStatus() {
-            const resp = await fetch('/api/groq/status');
-            const data = await resp.json();
-            const statusEl = document.getElementById('api-status');
-            if (data.configured) {
-                statusEl.className = 'api-status ok';
-                statusEl.textContent = '✓ 已配置';
-                savedApiKey = data.has_key ? '(已有)' : null;
-            } else {
-                statusEl.className = 'api-status warn';
-                statusEl.textContent = '⚠ 请配置API Key';
-                savedApiKey = null;
+            try {
+                const resp = await fetch('/api/groq/status');
+                const data = await resp.json();
+                const statusEl = document.getElementById('api-status');
+                if (data.configured) {
+                    statusEl.className = 'api-status ok';
+                    statusEl.textContent = '✓ 已配置';
+                    state.savedApiKey = data.has_key ? '(已有)' : null;
+                } else {
+                    statusEl.className = 'api-status warn';
+                    statusEl.textContent = '⚠ 请配置API Key';
+                    state.savedApiKey = null;
+                }
+            } catch (e) {
+                console.error('检查API状态失败:', e);
             }
         }
         
         async function loadProxyStatus() {
-            const resp = await fetch('/api/proxy/status');
-            const data = await resp.json();
-            useProxy = data.enabled;
-            document.getElementById('use-proxy').checked = useProxy;
-            updateProxyStatus();
+            try {
+                const resp = await fetch('/api/proxy/status');
+                const data = await resp.json();
+                state.useProxy = data.enabled;
+                document.getElementById('use-proxy').checked = state.useProxy;
+                updateProxyStatus();
+            } catch (e) {
+                console.error('加载代理状态失败:', e);
+            }
         }
         
         function updateProxyStatus() {
             const statusEl = document.getElementById('proxy-status');
-            if (useProxy) {
+            if (state.useProxy) {
                 statusEl.textContent = '✓ 代理已启用';
                 statusEl.style.color = '#27ae60';
             } else {
@@ -277,15 +300,19 @@
         }
         
         async function toggleProxy() {
-            useProxy = document.getElementById('use-proxy').checked;
-            const resp = await fetch('/api/proxy/config', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({enabled: useProxy})
-            });
-            const data = await resp.json();
-            if (data.success) {
-                updateProxyStatus();
+            state.useProxy = document.getElementById('use-proxy').checked;
+            try {
+                const resp = await fetch('/api/proxy/config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({enabled: state.useProxy})
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    updateProxyStatus();
+                }
+            } catch (e) {
+                console.error('切换代理失败:', e);
             }
         }
         
@@ -295,39 +322,47 @@
             const targetLang = document.getElementById('target-lang').value;
             const useProxy = document.getElementById('use-proxy').checked;
             let apiKey = apiKeyInput.value;
-            if (!apiKey && savedApiKey) {
-                apiKey = savedApiKey;
+            if (!apiKey && state.savedApiKey) {
+                apiKey = state.savedApiKey;
             }
-            const resp = await fetch('/api/groq/config', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({apiKey, model, targetLang})
-            });
-            const result = await resp.json();
-            
-            const proxyResp = await fetch('/api/proxy/config', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({enabled: useProxy})
-            });
-            
-            if (result.success) {
-                await checkGroqStatus();
-                await loadSettings();
-                await toggleProxy();
-                alert('设置已保存！');
+            try {
+                const resp = await fetch('/api/groq/config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({apiKey, model, targetLang})
+                });
+                const result = await resp.json();
+                
+                await fetch('/api/proxy/config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({enabled: useProxy})
+                });
+                
+                if (result.success) {
+                    await checkGroqStatus();
+                    await loadSettings();
+                    await toggleProxy();
+                    alert('设置已保存！');
+                }
+            } catch (e) {
+                console.error('保存设置失败:', e);
             }
         }
         
         async function loadDbStatus() {
-            const resp = await fetch('/api/db/stats');
-            const data = await resp.json();
-            const el = document.getElementById('db-status');
-            if (data.exists) {
-                const unfixed = data.total - data.fixed;
-                el.innerHTML = `<span class="stat">总记录数: <span class="stat-num">${data.total}</span></span><span class="stat">已翻译: <span class="stat-num">${data.translated}</span></span><span class="stat">已确认: <span class="stat-num">${data.fixed}</span></span><span class="stat">待确认: <span class="stat-num">${unfixed}</span></span>`;
-            } else {
-                el.innerHTML = `<span class="stat">数据库: 未建立</span>`;
+            try {
+                const resp = await fetch('/api/db/stats');
+                const data = await resp.json();
+                const el = document.getElementById('db-status');
+                if (data.exists) {
+                    const unfixed = data.total - data.fixed;
+                    el.innerHTML = `<span class="stat">总记录数: <span class="stat-num">${data.total}</span></span><span class="stat">已翻译: <span class="stat-num">${data.translated}</span></span><span class="stat">已确认: <span class="stat-num">${data.fixed}</span></span><span class="stat">待确认: <span class="stat-num">${unfixed}</span></span>`;
+                } else {
+                    el.innerHTML = `<span class="stat">数据库: 未建立</span>`;
+                }
+            } catch (e) {
+                console.error('加载数据库状态失败:', e);
             }
         }
         
@@ -335,37 +370,49 @@
             const btn = document.querySelector('button[onclick="initDb()"]');
             btn.textContent = '同步中...';
             btn.disabled = true;
-            const resp = await fetch('/api/db/init', {method: 'POST'});
-            const data = await resp.json();
-            btn.textContent = '建立数据库';
-            btn.disabled = false;
-            alert(data.inserted + '条插入, ' + data.updated + '条更新');
-            await loadDbStatus();
+            try {
+                const resp = await fetch('/api/db/init', {method: 'POST'});
+                const data = await resp.json();
+                btn.textContent = '建立数据库';
+                btn.disabled = false;
+                alert(data.inserted + '条插入, ' + data.updated + '条更新');
+                await loadDbStatus();
+            } catch (e) {
+                btn.textContent = '建立数据库';
+                btn.disabled = false;
+                console.error('初始化数据库失败:', e);
+            }
         }
         
         async function backupDb() {
-            const resp = await fetch('/api/db/backup', {method: 'POST'});
-            const data = await resp.json();
-            if (data.success) {
-                alert('备份成功: ' + data.path);
-            } else {
-                alert('备份失败: ' + data.error);
+            try {
+                const resp = await fetch('/api/db/backup', {method: 'POST'});
+                const data = await resp.json();
+                if (data.success) {
+                    alert('备份成功: ' + data.path);
+                } else {
+                    alert('备份失败: ' + data.error);
+                }
+            } catch (e) {
+                console.error('备份失败:', e);
+                alert('备份失败: ' + e.message);
             }
         }
         
         function renderItem() {
-            if (issues.length === 0) {
-                const msg = showAll ? '暂无记录' : '全部翻译已确认完成！';
+            const s = state;
+            if (s.issues.length === 0) {
+                const msg = s.showAll ? '暂无记录' : '全部翻译已确认完成！';
                 document.getElementById('issues-list').innerHTML = '<p>' + msg + '</p>';
                 return;
             }
-            if (currentIdx >= issues.length) {
-                currentIdx = issues.length - 1;
+            if (s.currentIdx >= s.issues.length) {
+                s.currentIdx = s.issues.length - 1;
             }
-            const issue = issues[currentIdx];
+            const issue = s.issues[s.currentIdx];
             const item = issue.item;
             const currentCn = item.cn || '';
-            currentJpText = item.jp || '';
+            s.currentJpText = item.jp || '';
             const isFixed = issue.is_fixed === 1;
             const idTag = isFixed 
                 ? `<span style="background:#27ae60;color:#fff;padding:2px 6px;border-radius:4px;margin-right:5px;">已确认</span>` 
@@ -374,11 +421,11 @@
                 <div class="issue-item">
                     <div class="meta">ID: ${idTag}${issue.id} | 文件: ${issue.file} | 索引: ${issue.index}</div>
                     <div class="label">原文 (jp):</div>
-                    <div class="jp">${item.jp || '(空)'}</div>
+                    <div class="jp">${escapeHtml(item.jp) || '(空)'}</div>
                     
                     <div class="option-section">
                         <div class="label">选项 A - 当前翻译 (cn): <button class="btn-small" onclick="copyToEditor('current')">📋复制</button></div>
-                        <div class="option-content" id="current-cn">${currentCn || '(空)'}</div>
+                        <div class="option-content" id="current-cn">${escapeHtml(currentCn) || '(空)'}</div>
                     </div>
                     
                     <div class="label">选项 B - AI建议: <button class="btn-small" onclick="refreshAISuggestion()">🔄刷新</button> <button class="btn-small" onclick="copyToEditor('ai')">📋复制</button> <span id="ai-loading" style="font-size:12px;color:#999;"></span></div>
@@ -386,19 +433,21 @@
                     
                     <div class="label">编辑区:</div>
                     <div class="ai-row">
-                        <textarea id="editor-textarea" rows="3">${currentCn}</textarea>
+                        <textarea id="editor-textarea" rows="3" oninput="updateCharCount()">${escapeHtml(currentCn)}</textarea>
                         <button class="btn-copy" onclick="copyFromEditor()" title="复制">📋复制</button>
                     </div>
+                    <div id="char-count" style="font-size:12px;color:#999;margin-top:5px;">字数: ${currentCn.length}</div>
                     <div class="btn-row">
                         <button class="btn-save" onclick="saveAndNext()">保存→跳转</button>
                     </div>
                 </div>
 `;
-            loadAISuggestion(currentJpText);
+            loadAISuggestion(s.currentJpText);
+            updateCharCount();
         }
         
         function refreshAISuggestion() {
-            loadAISuggestion(currentJpText);
+            loadAISuggestion(state.currentJpText);
         }
         
         async function loadAISuggestion(text) {
@@ -411,19 +460,22 @@
             loadingEl.textContent = '(加载中...)';
             try {
                 const targetLang = document.getElementById('target-lang')?.value || 'zh-Hans';
-                const resp = await fetch('/api/translate', {
+                const resp = await fetchWithTimeout('/api/translate', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({text: text, useProxy: useProxy, targetLang: targetLang})
+                    body: JSON.stringify({text: text, useProxy: state.useProxy, targetLang: targetLang})
                 });
                 const data = await resp.json();
                 if (data.translation) {
                     suggestionEl.textContent = data.translation;
+                    suggestionEl.classList.remove('error');
                 } else {
                     suggestionEl.textContent = '(翻译服务返回为空)';
+                    suggestionEl.classList.add('error');
                 }
             } catch (e) {
-                suggestionEl.textContent = '(翻译请求失败)';
+                suggestionEl.textContent = '(翻译请求失败: ' + e.message + ')';
+                suggestionEl.classList.add('error');
                 console.error('翻译请求失败:', e);
             }
             loadingEl.textContent = '';
@@ -438,12 +490,23 @@
             }
         }
         
-async function saveAndReload(cn) {
-            const issue = issues[currentIdx];
+        function copyFromEditor() {
+            const editor = document.getElementById('editor-textarea');
+            if (editor && editor.value) {
+                navigator.clipboard.writeText(editor.value).then(() => {
+                    alert('已复制到剪贴板');
+                }).catch(() => {
+                    alert('复制失败');
+                });
+            }
+        }
+        
+        async function saveAndReload(cn) {
+            const s = state;
+            const issue = s.issues[s.currentIdx];
             const savedFile = issue.file;
             const savedIndex = issue.index;
             
-            // 保存翻译
             const resp = await fetch('/api/update', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -454,17 +517,15 @@ async function saveAndReload(cn) {
             if (data.success) {
                 await loadDbStatus();
                 
-                // 更新当前条目而不重新加载列表（保持搜索结果）
-                if (currentIdx < issues.length) {
-                    issues[currentIdx].item.cn = cn || '';
-                    issues[currentIdx].is_fixed = 1;
+                if (s.currentIdx < s.issues.length) {
+                    s.issues[s.currentIdx].item.cn = cn || '';
+                    s.issues[s.currentIdx].is_fixed = 1;
                 }
                 
-                // 跳到下一条
-                if (currentIdx < issues.length - 1) {
-                    currentIdx++;
-                } else if (currentIdx > 0) {
-                    currentIdx--;
+                if (s.currentIdx < s.issues.length - 1) {
+                    s.currentIdx++;
+                } else if (s.currentIdx > 0) {
+                    s.currentIdx--;
                 }
                 renderList();
                 renderItem();
@@ -472,25 +533,29 @@ async function saveAndReload(cn) {
         }
         
         async function saveAndNext() {
-            const cn = document.getElementById('editor-textarea').value;
-            if (!cn || cn.trim() === '') {
+            const cn = document.getElementById('editor-textarea').value.trim();
+            if (!cn) {
                 alert('请先填写翻译内容');
+                return;
+            }
+            if (cn.length > 5000) {
+                alert('翻译内容过长，请控制在5000字以内');
                 return;
             }
             await saveAndReload(cn);
         }
         
         function prevItem() { 
-            if (currentIdx > 0) { 
-                currentIdx--; 
+            if (state.currentIdx > 0) { 
+                state.currentIdx--; 
                 renderList();
                 renderItem(); 
             }
         }
         
-function nextItem() { 
-            if (currentIdx < issues.length - 1) { 
-                currentIdx++; 
+        function nextItem() { 
+            if (state.currentIdx < state.issues.length - 1) { 
+                state.currentIdx++; 
                 renderList();
                 renderItem(); 
             }
@@ -500,12 +565,11 @@ function nextItem() {
             const input = document.getElementById('jump-input');
             const targetId = parseInt(input.value);
             if (!targetId || targetId < 1) { alert('请输入有效的ID'); return; }
-            if (issues.length === 0) { alert('当前没有数据'); return; }
+            if (state.issues.length === 0) { alert('当前没有数据'); return; }
             
-            // 在当前过滤范围内按ID查找
-            const targetIdx = issues.findIndex(i => i.id === targetId);
+            const targetIdx = state.issues.findIndex(i => i.id === targetId);
             if (targetIdx >= 0) {
-                currentIdx = targetIdx;
+                state.currentIdx = targetIdx;
                 renderList();
                 renderItem();
             } else {
@@ -513,42 +577,38 @@ function nextItem() {
             }
         }
         
-        let searchResults = [];
-        let searchIdx = 0;
-        
         async function doSearch() {
             const keyword = document.getElementById('search-input').value.trim();
             if (!keyword) return;
             
-            // 使用过滤状态的搜索范围
-            const searchType = showAll ? 'all' : 'unfixed';
+            const searchType = state.showAll ? 'all' : 'unfixed';
             let searchUrl = '/api/search?keyword=' + encodeURIComponent(keyword) + '&type=' + searchType;
-            if (filterLongCn) searchUrl += '&filter_long_cn=1';
+            if (state.filterLongCn) searchUrl += '&filter_long_cn=1';
             
             const resp = await fetch(searchUrl);
             const data = await resp.json();
-            searchResults = data.results || [];
-            searchIdx = 0;
+            state.searchResults = data.results || [];
+            state.searchIdx = 0;
             
-            if (searchResults.length === 0) {
+            if (state.searchResults.length === 0) {
                 alert('在当前过滤范围内未找到匹配结果');
                 return;
             }
             
-            issues = searchResults;
-            currentIdx = 0;
+            state.issues = state.searchResults;
+            state.currentIdx = 0;
             renderList();
             renderItem();
         }
         
         function nextSearch() {
-            if (searchResults.length === 0) {
+            if (state.searchResults.length === 0) {
                 doSearch();
                 return;
             }
-            searchIdx = (searchIdx + 1) % searchResults.length;
-            issues = searchResults;
-            currentIdx = searchIdx;
+            state.searchIdx = (state.searchIdx + 1) % state.searchResults.length;
+            state.issues = state.searchResults;
+            state.currentIdx = state.searchIdx;
             renderList();
             renderItem();
         }
