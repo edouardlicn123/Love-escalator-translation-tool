@@ -104,22 +104,28 @@ def save_groq_config(api_key, model, target_lang="zh-Hans", system_title="Love e
 def load_config():
     global DATA_FILE, CONFIG_FILE, SERVER_PORT, LENGTH_RATIO_MIN, LENGTH_RATIO_MAX, CHECK_RULES, DB_FILE
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(script_dir, "config.json")
     db_path = os.path.join(script_dir, "translation_status.db")
+    config_path = os.path.join(script_dir, "config.json")
+    
+    # 默认值
+    DATA_FILE = "table.json"
+    SERVER_PORT = 5382
+    LENGTH_RATIO_MIN = 0.3
+    LENGTH_RATIO_MAX = 2.5
+    CHECK_RULES = {}
+    DB_FILE = db_path
+    
     try:
         if os.path.exists(config_path):
             with open(config_path, encoding='utf-8') as f:
                 c = json.load(f)
                 DATA_FILE = c.get("data_file", "table.json")
-                SERVER_PORT = c.get("port", 5000)
+                SERVER_PORT = c.get("port", 5382)
                 LENGTH_RATIO_MIN = c.get("length_ratio_min", 0.3)
                 LENGTH_RATIO_MAX = c.get("length_ratio_max", 2.5)
                 CHECK_RULES = c.get("check_rules", {})
-        DB_FILE = db_path
     except Exception as e:
         print(f"配置加载失败: {e}")
-        DATA_FILE = "table.json"
-        SERVER_PORT = 5382
 
 def get_db_stats():
     if not os.path.exists(DB_FILE): return {"exists": False, "total": 0, "translated": 0, "fixed": 0}
@@ -329,35 +335,45 @@ class Handler(BaseHTTPRequestHandler):
             conn = sqlite3.connect(DB_FILE)
             cur = conn.cursor()
             if show_fixed == '1':
-                sql = "SELECT id, file_key, index_id, jp, cn FROM translation_status"
+                sql = "SELECT id, file_key, index_id, jp, cn, is_fixed FROM translation_status"
                 if filter_long_cn == '1':
                     sql += " WHERE LENGTH(cn) > LENGTH(jp)"
                 sql += " ORDER BY id"
                 rows = cur.execute(sql).fetchall()
             else:
-                sql = "SELECT id, file_key, index_id, jp, cn FROM translation_status WHERE is_fixed=0"
+                sql = "SELECT id, file_key, index_id, jp, cn, is_fixed FROM translation_status WHERE is_fixed=0"
                 if filter_long_cn == '1':
                     sql += " AND LENGTH(cn) > LENGTH(jp)"
                 sql += " ORDER BY id"
                 rows = cur.execute(sql).fetchall()
             conn.close()
-            results = [{"id": r[0], "file": r[1], "index": r[2], "item": {"jp": r[3], "cn": r[4]}} for r in rows]
+            results = [{"id": r[0], "file": r[1], "index": r[2], "item": {"jp": r[3], "cn": r[4]}, "is_fixed": r[5]} for r in rows]
             self.send_json({"total": len(results), "items": results})
         elif self.path.startswith('/api/search?'):
             import urllib.parse
             query = urllib.parse.parse_qs(self.path.split('?')[1])
             keyword = query.get('keyword', [''])[0]
             search_type = query.get('type', ['all'])[0]
+            filter_long_cn = query.get('filter_long_cn', ['0'])[0]
             conn = sqlite3.connect(DB_FILE)
             cur = conn.cursor()
-            if search_type == 'jp':
-                rows = cur.execute("SELECT file_key, index_id, jp, cn FROM translation_status WHERE jp LIKE ? LIMIT 100", ('%' + keyword + '%',)).fetchall()
-            elif search_type == 'cn':
-                rows = cur.execute("SELECT file_key, index_id, jp, cn FROM translation_status WHERE cn LIKE ? LIMIT 100", ('%' + keyword + '%',)).fetchall()
-            else:
-                rows = cur.execute("SELECT file_key, index_id, jp, cn FROM translation_status WHERE jp LIKE ? OR cn LIKE ? LIMIT 100", ('%' + keyword + '%', '%' + keyword + '%')).fetchall()
+            
+            # 构建WHERE条件
+            where_parts = []
+            params = []
+            if search_type == 'unfixed':
+                where_parts.append('is_fixed=0')
+            if filter_long_cn == '1':
+                where_parts.append('LENGTH(cn) > LENGTH(jp)')
+            if keyword:
+                where_parts.append('(jp LIKE ? OR cn LIKE ?)')
+                params.extend(['%' + keyword + '%', '%' + keyword + '%'])
+            
+            where_sql = ' AND '.join(where_parts) if where_parts else '1=1'
+            sql = f"SELECT id, file_key, index_id, jp, cn FROM translation_status WHERE {where_sql} LIMIT 100"
+            rows = cur.execute(sql, params).fetchall()
             conn.close()
-            results = [{"file": r[0], "index": r[1], "item": {"jp": r[2], "cn": r[3]}} for r in rows]
+            results = [{"id": r[0], "file": r[1], "index": r[2], "item": {"jp": r[3], "cn": r[4]}} for r in rows]
             self.send_json({"results": results, "total": len(results)})
         else: self.send_error(404)
     

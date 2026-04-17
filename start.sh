@@ -90,6 +90,40 @@ start_server() {
     exec python3 check_translation.py --port $PORT
 }
 
+copy_table() {
+    echo "正在复制 table.json..."
+    
+    TARGET_DIR="/home/edo/loveEscalatorTL"
+    TARGET_FILE="$TARGET_DIR/table.json"
+    
+    if [ ! -f "$DATA_FILE" ]; then
+        echo "✗ 错误: table.json 不存在"
+        return 1
+    fi
+    
+    if [ -f "$TARGET_FILE" ]; then
+        echo "⚠ 目标文件已存在: $TARGET_FILE"
+        echo -n "是否覆盖? (y/n): "
+        read confirm
+        if [ "$confirm" != "y" ]; then
+            echo "已取消"
+            return 0
+        fi
+    fi
+    
+    if [ ! -d "$TARGET_DIR" ]; then
+        mkdir -p "$TARGET_DIR"
+    fi
+    
+    cp "$DATA_FILE" "$TARGET_FILE"
+    
+    if [ $? -eq 0 ]; then
+        echo "✓ 已复制到 $TARGET_FILE"
+    else
+        echo "✗ 复制失败"
+    fi
+}
+
 kill_server() {
     echo "正在杀死进程..."
     pkill -f "check_translation.py" 2>/dev/null
@@ -146,6 +180,7 @@ show_menu() {
     echo "1. 启动服务"
     echo "2. 安装依赖"
     echo "3. 初始化数据库"
+    echo "4. 传输翻译文件"
     echo "9. 杀死进程"
     echo "0. 退出"
     echo ""
@@ -160,6 +195,7 @@ while true; do
         1) start_server ;;
         2) install_deps; echo ""; read -p "按回车继续..." ;;
         3) init_db; echo ""; read -p "按回车继续..." ;;
+        4) copy_table; echo ""; read -p "按回车继续..." ;;
         9) kill_server; echo ""; read -p "按回车继续..." ;;
         0) exit 0 ;;
         *) echo "无效选择"; sleep 1 ;;

@@ -53,7 +53,9 @@
         .jump-box button:hover { opacity: 0.9; }
         .search-box { background: #fff; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         .search-box .label { font-weight: bold; font-size: 12px; color: #666; margin-bottom: 8px; }
-        .search-box input { width: 100%; padding: 8px; font-size: 14px; margin-bottom: 8px; border: 1px solid #ddd; border-radius: 4px; }
+        .search-box .filter-item { display: block; margin: 4px 0; font-size: 13px; }
+        .search-box .filter-item input { margin-right: 4px; }
+        .search-box input[type="text"] { width: 100%; padding: 8px; font-size: 14px; margin-bottom: 8px; border: 1px solid #ddd; border-radius: 4px; }
         .search-box button { width: 100%; padding: 8px; background: #9b59b6; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
         .search-box button:hover { opacity: 0.9; }
         .issue-item { background: #fff; padding: 20px; margin-bottom: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
@@ -112,8 +114,8 @@
                 </div>
                 <div class="search-box" style="margin-top: 10px;">
                     <div class="label">过滤</div>
-                    <label><input type="checkbox" id="show-fixed"> 显示已确认</label>
-                    <label style="margin-top:8px;display:block;"><input type="checkbox" id="filter-long-cn"> 翻译过长</label>
+                    <label class="filter-item"><input type="checkbox" id="show-fixed">显示已确认</label>
+                    <label class="filter-item"><input type="checkbox" id="filter-long-cn">翻译过长</label>
                     <button onclick="applyFilter()" style="width:100%;margin-top:8px;padding:6px;background:#3498db;color:#fff;border:none;border-radius:4px;cursor:pointer;">确认</button>
                 </div>
 </div>
@@ -147,6 +149,14 @@
         let filterLongCn = false;
         let currentJpText = '';
         
+        // 获取带过滤条件的URL路径
+        function getFilteredApiPath(basePath) {
+            let path = basePath;
+            if (showAll) path += '?show_fixed=1';
+            if (filterLongCn) path += showAll ? '&filter_long_cn=1' : '?filter_long_cn=1';
+            return path;
+        }
+        
         async function init() {
             await loadDbStatus();
             await loadIssues();
@@ -158,8 +168,10 @@
             if (filterLongCn) {
                 url += url.includes('?') ? '&filter_long_cn=1' : '?filter_long_cn=1';
             }
+            console.log('loadIssues: url=', url);
             const resp = await fetch(url);
             const data = await resp.json();
+            console.log('loadIssues: got', data.total, 'items');
             issues = data.items || [];
             currentIdx = 0;
             renderList();
@@ -179,6 +191,14 @@
                 const active = idx === currentIdx ? 'active' : '';
                 return `<div class="row ${active}" onclick="clickListItem(${idx})"><div class="col-id">${String(issue.id).padStart(6, '0')}</div><div class="col-jp">${jpShort}</div></div>`;
             }).join('');
+            
+            // 自动滚动到当前行
+            setTimeout(() => {
+                const activeRow = listEl.querySelector('.row.active');
+                if (activeRow) {
+                    activeRow.scrollIntoView({block: 'center', behavior: 'smooth'});
+                }
+            }, 100);
         }
         
         function clickListItem(idx) {
@@ -188,25 +208,27 @@
         }
         
         function applyFilter() {
-            const wasShowAll = showAll;
+            const currentId = issues[currentIdx]?.id;
+            console.log('applyFilter: currentId=', currentId, 'currentIdx=', currentIdx);
             showAll = document.getElementById('show-fixed').checked;
             filterLongCn = document.getElementById('filter-long-cn').checked;
             
-            const currentId = issues[currentIdx]?.id;
+            let url = '/api/next';
+            if (showAll) url += '?show_fixed=1';
+            if (filterLongCn) url += showAll ? '&filter_long_cn=1' : '?filter_long_cn=1';
+            console.log('applyFilter: url=', url);
             
-            if (!wasShowAll && showAll && currentId) {
-                let url = '/api/next?show_fixed=1';
-                if (filterLongCn) url += '&filter_long_cn=1';
-                fetch(url).then(r => r.json()).then(data => {
-                    issues = data.items || [];
-                    const newIdx = issues.findIndex(i => i.id === currentId);
-                    currentIdx = newIdx >= 0 ? newIdx : 0;
-                    renderList();
-                    renderItem();
-                });
-            } else {
-                loadIssues();
-            }
+            fetch(url).then(r => r.json()).then(data => {
+                issues = data.items || [];
+                console.log('applyFilter: got issues length=', issues.length);
+                console.log('applyFilter: looking for id=', currentId);
+                const newIdx = currentId ? issues.findIndex(i => i.id === currentId) : -1;
+                console.log('applyFilter: newIdx=', newIdx);
+                currentIdx = newIdx >= 0 ? newIdx : 0;
+                console.log('applyFilter: set currentIdx=', currentIdx);
+                renderList();
+                renderItem();
+            });
         }
         
         async function loadSettings() {
@@ -303,7 +325,7 @@
             const el = document.getElementById('db-status');
             if (data.exists) {
                 const unfixed = data.total - data.fixed;
-                el.innerHTML = `<span class="stat">记录数: <span class="stat-num">${data.total}</span></span><span class="stat">待确认: <span class="stat-num">${unfixed}</span></span><span class="stat">已确认: <span class="stat-num">${data.fixed}</span></span><span class="stat">已翻译: <span class="stat-num">${data.translated}</span></span>`;
+                el.innerHTML = `<span class="stat">总记录数: <span class="stat-num">${data.total}</span></span><span class="stat">已翻译: <span class="stat-num">${data.translated}</span></span><span class="stat">已确认: <span class="stat-num">${data.fixed}</span></span><span class="stat">待确认: <span class="stat-num">${unfixed}</span></span>`;
             } else {
                 el.innerHTML = `<span class="stat">数据库: 未建立</span>`;
             }
@@ -344,9 +366,13 @@
             const item = issue.item;
             const currentCn = item.cn || '';
             currentJpText = item.jp || '';
+            const isFixed = issue.is_fixed === 1;
+            const idTag = isFixed 
+                ? `<span style="background:#27ae60;color:#fff;padding:2px 6px;border-radius:4px;margin-right:5px;">已确认</span>` 
+                : `<span style="background:#e67e22;color:#fff;padding:2px 6px;border-radius:4px;margin-right:5px;">未确认</span>`;
             document.getElementById('issues-list').innerHTML = `
                 <div class="issue-item">
-                    <div class="meta">ID: ${issue.id} | 文件: ${issue.file} | 索引: ${issue.index}</div>
+                    <div class="meta">ID: ${idTag}${issue.id} | 文件: ${issue.file} | 索引: ${issue.index}</div>
                     <div class="label">原文 (jp):</div>
                     <div class="jp">${item.jp || '(空)'}</div>
                     
@@ -412,17 +438,36 @@
             }
         }
         
-        async function saveAndReload(cn) {
+async function saveAndReload(cn) {
             const issue = issues[currentIdx];
+            const savedFile = issue.file;
+            const savedIndex = issue.index;
+            
+            // 保存翻译
             const resp = await fetch('/api/update', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({file: issue.file, index: issue.index, cn: cn || ''})
+                body: JSON.stringify({file: savedFile, index: savedIndex, cn: cn || ''})
             });
             const data = await resp.json();
+            
             if (data.success) {
                 await loadDbStatus();
-                await loadIssues();
+                
+                // 更新当前条目而不重新加载列表（保持搜索结果）
+                if (currentIdx < issues.length) {
+                    issues[currentIdx].item.cn = cn || '';
+                    issues[currentIdx].is_fixed = 1;
+                }
+                
+                // 跳到下一条
+                if (currentIdx < issues.length - 1) {
+                    currentIdx++;
+                } else if (currentIdx > 0) {
+                    currentIdx--;
+                }
+                renderList();
+                renderItem();
             }
         }
         
@@ -438,31 +483,34 @@
         function prevItem() { 
             if (currentIdx > 0) { 
                 currentIdx--; 
+                renderList();
                 renderItem(); 
             }
         }
-        async function nextItem() { 
+        
+function nextItem() { 
             if (currentIdx < issues.length - 1) { 
                 currentIdx++; 
+                renderList();
                 renderItem(); 
-            } else {
-                await loadIssues();
-                if (issues.length > 0) {
-                    currentIdx = 0;
-                    renderItem();
-                } else {
-                    alert('已到最后一条');
-                }
             }
         }
+        
         function jumpToItem() {
             const input = document.getElementById('jump-input');
-            const num = parseInt(input.value);
-            if (!num || num < 1) { alert('请输入有效的数字'); return; }
+            const targetId = parseInt(input.value);
+            if (!targetId || targetId < 1) { alert('请输入有效的ID'); return; }
             if (issues.length === 0) { alert('当前没有数据'); return; }
-            if (num > issues.length) { alert('超出范围，当前只有 ' + issues.length + ' 条'); input.value = issues.length; return; }
-            currentIdx = num - 1;
-            renderItem();
+            
+            // 在当前过滤范围内按ID查找
+            const targetIdx = issues.findIndex(i => i.id === targetId);
+            if (targetIdx >= 0) {
+                currentIdx = targetIdx;
+                renderList();
+                renderItem();
+            } else {
+                alert('在当前过滤范围内未找到ID: ' + targetId);
+            }
         }
         
         let searchResults = [];
@@ -472,18 +520,24 @@
             const keyword = document.getElementById('search-input').value.trim();
             if (!keyword) return;
             
-            const resp = await fetch('/api/search?keyword=' + encodeURIComponent(keyword) + '&type=all');
+            // 使用过滤状态的搜索范围
+            const searchType = showAll ? 'all' : 'unfixed';
+            let searchUrl = '/api/search?keyword=' + encodeURIComponent(keyword) + '&type=' + searchType;
+            if (filterLongCn) searchUrl += '&filter_long_cn=1';
+            
+            const resp = await fetch(searchUrl);
             const data = await resp.json();
             searchResults = data.results || [];
             searchIdx = 0;
             
             if (searchResults.length === 0) {
-                alert('未找到匹配结果');
+                alert('在当前过滤范围内未找到匹配结果');
                 return;
             }
             
-            issues = [searchResults[searchIdx]];
-            document.getElementById('issue-count').textContent = searchResults.length + ' (搜索)';
+            issues = searchResults;
+            currentIdx = 0;
+            renderList();
             renderItem();
         }
         
@@ -493,7 +547,9 @@
                 return;
             }
             searchIdx = (searchIdx + 1) % searchResults.length;
-            issues = [searchResults[searchIdx]];
+            issues = searchResults;
+            currentIdx = searchIdx;
+            renderList();
             renderItem();
         }
         

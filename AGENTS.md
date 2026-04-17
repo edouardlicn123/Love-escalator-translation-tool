@@ -68,10 +68,11 @@ python3 check_translation.py --port 5382
 
 ### 服务器重启步骤
 
-1. **查找并杀掉旧进程**
+1. **强制杀死旧进程** (确保完全杀掉)
    ```bash
-   pkill -f "check_translation.py" || kill $(lsof -ti:5382) 2>/dev/null
-   sleep 1
+   pkill -9 -f "check_translation.py" 2>/dev/null
+   fuser -k 5382/tcp 2>/dev/null
+   sleep 2
    ```
 
 2. **启动新进程**
@@ -80,10 +81,12 @@ python3 check_translation.py --port 5382
    sleep 3
    ```
 
-3. **验证服务**
+3. **验证服务正常** (必须步骤!)
    ```bash
    curl -s "http://127.0.0.1:5382/api/db/stats"
    ```
+   - 如果返回正常 JSON → 启动成功
+   - 如果返回错误 → 检查 `/tmp/server.log`
 
 ### 后端路径匹配规则
 
