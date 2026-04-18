@@ -386,6 +386,43 @@ class Handler(BaseHTTPRequestHandler):
         
         if self.path == '/api/db/init': self.send_json(sync_db())
         elif self.path == '/api/db/backup': self.send_json(backup_db())
+        elif self.path == '/api/db/sync-jp':
+            try:
+                with open(config.data_file, 'r', encoding='utf-8') as f:
+                    table_data = json.load(f)
+                with sqlite3.connect(config.db_file) as conn:
+                    cur = conn.cursor()
+                    updated = 0
+                    for file_key, items in table_data.items():
+                        if not isinstance(items, list): continue
+                        for idx, item in enumerate(items):
+                            jp = item.get('jp', '')
+                            cur.execute("UPDATE translation_status SET jp=? WHERE file_key=? AND index_id=?", (jp, file_key, idx))
+                            if cur.rowcount > 0: updated += 1
+                    conn.commit()
+                self.send_json({"success": True, "updated": updated})
+            except Exception as e:
+                logger.error(f"同步原文失败: {e}")
+                self.send_json({"error": str(e)})
+        elif self.path == '/api/db/sync-cn':
+            try:
+                with open(config.data_file, 'r', encoding='utf-8') as f:
+                    table_data = json.load(f)
+                with sqlite3.connect(config.db_file) as conn:
+                    cur = conn.cursor()
+                    updated = 0
+                    for file_key, items in table_data.items():
+                        if not isinstance(items, list): continue
+                        for idx, item in enumerate(items):
+                            cn = item.get('cn', '')
+                            is_translated = 1 if cn and cn.strip() else 0
+                            cur.execute("UPDATE translation_status SET cn=?, is_translated=? WHERE file_key=? AND index_id=?", (cn, is_translated, file_key, idx))
+                            if cur.rowcount > 0: updated += 1
+                    conn.commit()
+                self.send_json({"success": True, "updated": updated})
+            except Exception as e:
+                logger.error(f"同步翻译失败: {e}")
+                self.send_json({"error": str(e)})
         elif self.path == '/api/filter':
             rules = data.get("rules", [])
             if rules:
@@ -408,9 +445,23 @@ class Handler(BaseHTTPRequestHandler):
             now = datetime.datetime.now().isoformat()
             is_translated = 1 if new_cn and new_cn.strip() else 0
             is_fixed = 1
+            
+            # 更新数据库
             with sqlite3.connect(config.db_file) as conn:
-                conn.execute("INSERT OR REPLACE INTO translation_status (file_key, index_id, cn, is_translated, is_fixed, issue_type, updated_at) VALUES (?,?,?,?,?,?,?)", (file_key, idx, new_cn, is_translated, is_fixed, "", now))
+                conn.execute("UPDATE translation_status SET cn=?, is_translated=?, is_fixed=?, updated_at=? WHERE file_key=? AND index_id=?", (new_cn, is_translated, is_fixed, now, file_key, idx))
                 conn.commit()
+            
+            # 同时更新 table.json
+            try:
+                with open(config.data_file, 'r', encoding='utf-8') as f:
+                    table_data = json.load(f)
+                if file_key in table_data and isinstance(table_data[file_key], list) and idx < len(table_data[file_key]):
+                    table_data[file_key][idx]['cn'] = new_cn
+                    with open(config.data_file, 'w', encoding='utf-8') as f:
+                        json.dump(table_data, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                logger.error(f"更新 table.json 失败: {e}")
+            
             cache.clear()
             self.send_json({"success": True})
         elif self.path == '/api/translate': self.send_json({"translation": translate_with_api(data.get("text", ""), data.get("api", DEFAULT_API), data.get("useProxy"), data.get("targetLang"))})
