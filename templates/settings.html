@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="version" content="20240416">
-    <title>设置 - 翻译质量检查工具</title>
+    <title>Settings - Translation Quality Check Tool</title>
     <style>
         * { box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
@@ -26,44 +26,55 @@
 </head>
 <body>
     <div class="container">
-        <a href="/" class="back-link">← 返回主页面</a>
-        <h1>设置</h1>
-        
+        <a href="/" class="back-link" id="back-link">← Back to Main</a>
+        <h1 id="page-title">Settings</h1>
+
         <div class="settings">
-            <h3>基本设置</h3>
+            <h3>Language</h3>
             <div class="config-row">
-                <label>系统标题:</label>
-                <input type="text" id="system-title" placeholder="Love escalator 翻译质量检查工具" style="width:200px;">
-                <button class="btn" onclick="saveSystemTitle()">确认</button>
+                <label id="label-lang">Language:</label>
+                <select id="lang-switch" onchange="setLanguage(this.value)">
+                    <option value="en">English</option>
+                    <option value="zh">简体中文</option>
+                </select>
             </div>
         </div>
-        
+
         <div class="settings">
-            <h3>Groq API 配置</h3>
+            <h3>Basic Settings</h3>
             <div class="config-row">
-                <label>API Key:</label>
+                <label id="label-sys-title">System Title:</label>
+                <input type="text" id="system-title" placeholder="Love escalator Translation Tool" style="width:200px;">
+                <button class="btn" onclick="saveSystemTitle()">Save</button>
+            </div>
+        </div>
+
+        <div class="settings">
+            <h3 id="label-groq">Groq API Config</h3>
+            <div class="config-row">
+                <label id="label-api-key">API Key:</label>
                 <input type="password" id="groq-api-key" placeholder="gsk_xxxxxxxxxxxx">
             </div>
             <div class="config-row">
-                <label>模型:</label>
+                <label id="label-model">Model:</label>
                 <select id="groq-model" style="width:200px;">
-                    <option value="llama-3.3-70b-versatile" selected>llama-3.3-70b-versatile (高质量)</option>
-                    <option value="llama-3.1-8b-instant">llama-3.1-8b-instant (快速)</option>
+                    <option value="llama-3.3-70b-versatile" selected>llama-3.3-70b-versatile (High Quality)</option>
+                    <option value="llama-3.1-8b-instant">llama-3.1-8b-instant (Fast)</option>
                 </select>
             </div>
             <div class="config-row">
-                <label>代理:</label>
-                <label><input type="checkbox" id="use-proxy"> 使用代理 (socks5://127.0.0.1:10808)</label>
+                <label id="label-proxy">Proxy:</label>
+                <label><input type="checkbox" id="use-proxy"> <span id="label-proxy-cb">Use proxy (socks5://127.0.0.1:10808)</span></label>
                 <span id="proxy-status" style="font-size:12px;color:#666;"></span>
             </div>
             <div class="config-row">
-                <label>目标语言:</label>
+                <label id="label-target-lang">Target Language:</label>
                 <select id="target-lang">
-                    <option value="en">english</option>
-                    <option value="fr">français</option>
-                    <option value="de">deutsch</option>
-                    <option value="es">español</option>
-                    <option value="pt">português</option>
+                    <option value="en">English</option>
+                    <option value="fr">Français</option>
+                    <option value="de">Deutsch</option>
+                    <option value="es">Español</option>
+                    <option value="pt">Português</option>
                     <option value="ja">日本語</option>
                     <option value="ko">한국어</option>
                     <option value="zh-Hant">繁體中文</option>
@@ -71,8 +82,8 @@
                 </select>
             </div>
             <div class="config-row" style="margin-top:15px;">
-                <button class="btn" onclick="saveSettings()">保存设置</button>
-                <span id="api-status" class="api-status warn">⚠ 请配置API Key</span>
+                <button class="btn" onclick="saveSettings()" id="btn-save">Save Settings</button>
+                <span id="api-status" class="api-status warn" id="api-status-text">⚠ API Key Required</span>
             </div>
         </div>
     </div>
@@ -80,12 +91,120 @@
     <script>
         let useProxy = false;
         let savedApiKey = null;
-        
+        let currentLang = 'en';
+
+        const i18n = {
+            en: {
+                back_link: "← Back to Main",
+                settings: "Settings",
+                language: "Language",
+                basic_settings: "Basic Settings",
+                system_title: "System Title:",
+                system_title_placeholder: "Love escalator Translation Tool",
+                save_btn: "Save",
+                api_config: "Groq API Config",
+                api_key: "API Key:",
+                api_key_placeholder: "gsk_xxxxxxxxxxxx",
+                model: "Model:",
+                model_quality: "High Quality",
+                model_fast: "Fast",
+                proxy: "Proxy:",
+                proxy_use: "Use proxy (socks5://127.0.0.1:10808)",
+                target_lang: "Target Language:",
+                configured: "✓ Configured",
+                config_needed: "⚠ API Key Required",
+                ok: "✓ Configured",
+                warn: "⚠ Please configure API Key",
+                proxy_enabled: "✓ Proxy Enabled",
+                proxy_direct: "⚠ Direct (may fail)",
+                saved: "Save Settings",
+                title_saved: "Title saved!",
+                lang_save_failed: "Failed to save language"
+            },
+            zh: {
+                back_link: "← 返回主页面",
+                settings: "设置",
+                language: "语言",
+                basic_settings: "基本设置",
+                system_title: "系统标题:",
+                system_title_placeholder: "Love escalator 翻译质量检查工具",
+                save_btn: "保存",
+                api_config: "Groq API 配置",
+                api_key: "API Key:",
+                api_key_placeholder: "gsk_xxxxxxxxxxxx",
+                model: "模型:",
+                model_quality: "高质量)",
+                model_fast: "快速)",
+                proxy: "代理:",
+                proxy_use: "使用代理 (socks5://127.0.0.1:10808)",
+                target_lang: "目标语言:",
+                configured: "✓ 已配置",
+                config_needed: "⚠ 请配置API Key",
+                ok: "✓ 已配置",
+                warn: "⚠ 请配置API Key",
+                proxy_enabled: "✓ 代理已启用",
+                proxy_direct: "⚠ 直连（可能无法访问）",
+                saved: "保存设置",
+                title_saved: "系统标题已保存！",
+                lang_save_failed: "保存语言失败"
+            }
+        };
+
+        function t(key) {
+            return i18n[currentLang]?.[key] || i18n['en']?.[key] || key;
+        }
+
         async function init() {
+            await loadLanguage();
+            applyI18n();
             await checkGroqStatus();
             await loadProxyStatus();
             await loadSettings();
             await loadSystemTitle();
+        }
+
+        function applyI18n() {
+            try {
+                const el = (id) => document.getElementById(id);
+                if (el('back-link')) el('back-link').textContent = t('back_link');
+                if (el('page-title')) el('page-title').textContent = t('settings');
+                if (el('label-lang')) el('label-lang').textContent = t('language') + ':';
+                if (el('label-sys-title')) el('label-sys-title').textContent = t('system_title');
+                if (el('label-groq')) el('label-groq').textContent = t('api_config');
+                if (el('label-api-key')) el('label-api-key').textContent = t('api_key');
+                if (el('label-model')) el('label-model').textContent = t('model');
+                if (el('label-proxy')) el('label-proxy').textContent = t('proxy');
+                if (el('label-proxy-cb')) el('label-proxy-cb').textContent = t('proxy_use');
+                if (el('label-target-lang')) el('label-target-lang').textContent = t('target_lang');
+                if (el('btn-save')) el('btn-save').textContent = t('saved');
+            } catch(e) {
+                console.error('i18n error:', e);
+            }
+        }
+
+        async function loadLanguage() {
+            try {
+                const resp = await fetch('/api/groq/status');
+                const data = await resp.json();
+                currentLang = data.language || 'en';
+                document.getElementById('lang-switch').value = currentLang;
+            } catch (e) {
+                currentLang = 'en';
+            }
+        }
+
+        async function setLanguage(lang) {
+            try {
+                await fetch('/api/groq/config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({language: lang})
+                });
+                currentLang = lang;
+                applyI18n();
+            } catch (e) {
+                alert(t('lang_save_failed') || 'Failed to save language');
+            }
         }
         
         async function loadSystemTitle() {
@@ -97,7 +216,7 @@
         }
         
         async function saveSystemTitle() {
-            const title = document.getElementById('system-title').value || '翻译质量检查工具';
+            const title = document.getElementById('system-title').value || 'Translation Quality Check Tool';
             const apiKeyInput = document.getElementById('groq-api-key');
             const model = document.getElementById('groq-model').value;
             const targetLang = document.getElementById('target-lang').value;
@@ -112,9 +231,9 @@
                 body: JSON.stringify({apiKey, model, targetLang, systemTitle: title})
             });
             const result = await resp.json();
-            
+
             if (result.success) {
-                alert('系统标题已保存！');
+                alert(t('title_saved'));
             }
         }
         
@@ -135,15 +254,15 @@
             const statusEl = document.getElementById('api-status');
             if (data.configured) {
                 statusEl.className = 'api-status ok';
-                statusEl.textContent = '✓ 已配置';
-                savedApiKey = data.has_key ? '(已有)' : null;
+                statusEl.textContent = t('configured');
+                savedApiKey = data.has_key ? '(saved)' : null;
             } else {
                 statusEl.className = 'api-status warn';
-                statusEl.textContent = '⚠ 请配置API Key';
+                statusEl.textContent = t('config_needed');
                 savedApiKey = null;
             }
         }
-        
+
         async function loadProxyStatus() {
             const resp = await fetch('/api/proxy/status');
             const data = await resp.json();
@@ -151,14 +270,14 @@
             document.getElementById('use-proxy').checked = useProxy;
             updateProxyStatus();
         }
-        
+
         function updateProxyStatus() {
             const statusEl = document.getElementById('proxy-status');
             if (useProxy) {
-                statusEl.textContent = '✓ 代理已启用';
+                statusEl.textContent = t('proxy_enabled');
                 statusEl.style.color = '#27ae60';
             } else {
-                statusEl.textContent = '⚠ 直连（可能无法访问）';
+                statusEl.textContent = t('proxy_direct');
                 statusEl.style.color = '#e74c3c';
             }
         }
@@ -188,10 +307,10 @@
             if (result.success) {
                 await checkGroqStatus();
                 await loadSettings();
-                alert('设置已保存！');
+                alert(t('saved').replace('Save Settings', 'Settings saved!'));
             }
         }
-        
+
         init();
     </script>
 </body>

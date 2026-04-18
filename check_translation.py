@@ -21,7 +21,7 @@ class AppConfig:
     length_ratio_min: float = 0.3
     length_ratio_max: float = 2.5
     check_rules: Dict[str, Any] = field(default_factory=dict)
-    system_title: str = "Love escalator 翻译质量检查工具"
+    system_title: str = "Translation Quality Check Tool"
 
     def __post_init__(self):
         self.proxy_url = f"socks5://{self.proxy_host}:{self.proxy_port}"
@@ -51,7 +51,7 @@ LANG_MAP = {
 
 TRANSLATION_APIS = {
     "groq": {
-        "name": "Groq API (推荐)",
+        "name": "Groq API (Recommended)",
         "url": "https://api.groq.com/openai/v1",
         "model": DEFAULT_MODEL,
         "target_lang": "zh-Hans"
@@ -61,7 +61,11 @@ TRANSLATION_APIS = {
 def init_db():
     with sqlite3.connect(config.db_file) as conn:
         conn.execute('''CREATE TABLE IF NOT EXISTS translation_status (id INTEGER PRIMARY KEY, file_key TEXT, index_id INTEGER, jp TEXT, cn TEXT, is_translated INTEGER DEFAULT 0, is_fixed INTEGER DEFAULT 0, issue_type TEXT, ai_suggestion TEXT, created_at TEXT, updated_at TEXT, UNIQUE(file_key, index_id))''')
-        conn.execute('''CREATE TABLE IF NOT EXISTS groq_config (id INTEGER PRIMARY KEY CHECK (id=1), api_key TEXT, model TEXT DEFAULT 'llama-3.3-70b-versatile', target_lang TEXT DEFAULT 'zh-Hans', updated_at TEXT)''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS groq_config (id INTEGER PRIMARY KEY CHECK (id=1), api_key TEXT, model TEXT DEFAULT 'llama-3.3-70b-versatile', target_lang TEXT DEFAULT 'zh-Hans', language TEXT DEFAULT 'en', updated_at TEXT)''')
+        try:
+            conn.execute("ALTER TABLE groq_config ADD COLUMN language TEXT DEFAULT 'en'")
+        except:
+            pass
         conn.execute("CREATE INDEX IF NOT EXISTS idx_is_fixed ON translation_status(is_fixed)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_file_key ON translation_status(file_key)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_fixed_file ON translation_status(is_fixed, file_key)")
@@ -71,21 +75,25 @@ def load_groq_config():
     if not config.db_file or not os.path.exists(config.db_file): return
     try:
         with sqlite3.connect(config.db_file) as conn:
-            row = conn.cursor().execute("SELECT api_key, model, target_lang FROM groq_config WHERE id=1").fetchone()
+            row = conn.cursor().execute("SELECT api_key, model, target_lang, language FROM groq_config WHERE id=1").fetchone()
             if row:
                 TRANSLATION_APIS["groq"]["api_key"] = row[0] or ""
                 TRANSLATION_APIS["groq"]["model"] = row[1] or DEFAULT_MODEL
                 TRANSLATION_APIS["groq"]["target_lang"] = row[2] if len(row) > 2 else "zh-Hans"
+                TRANSLATION_APIS["groq"]["language"] = row[3] if len(row) > 3 and row[3] else "en"
     except Exception:
         pass
 
-def save_groq_config(api_key, model, target_lang="zh-Hans"):
+def save_groq_config(api_key, model, target_lang="zh-Hans", language="en"):
+    language = language or "en"
+    system_title = config.system_title or "Translation Quality Check Tool"
     with sqlite3.connect(config.db_file) as conn:
-        conn.execute("INSERT OR REPLACE INTO groq_config VALUES(1,?,?,?,?)", (api_key, model, target_lang, datetime.datetime.now().isoformat()))
+        conn.execute("INSERT OR REPLACE INTO groq_config VALUES(?,?,?,?,?,?,?)", (1, api_key, model, target_lang, datetime.datetime.now().isoformat(), system_title, language))
         conn.commit()
     TRANSLATION_APIS["groq"]["api_key"] = api_key
     TRANSLATION_APIS["groq"]["model"] = model
     TRANSLATION_APIS["groq"]["target_lang"] = target_lang
+    TRANSLATION_APIS["groq"]["language"] = language
 
 def load_config():
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -101,7 +109,7 @@ def load_config():
                 config.length_ratio_max = c.get("length_ratio_max", 2.5)
                 config.check_rules = c.get("check_rules", {})
     except Exception as e:
-        print(f"配置加载失败: {e}")
+        print(f"Config load failed: {e}")
 
 def get_db_stats():
     if not os.path.exists(config.db_file): return {"exists": False, "total": 0, "translated": 0, "fixed": 0}
@@ -136,7 +144,7 @@ def sync_db():
     return {"inserted": inserted, "updated": updated}
 
 def backup_db():
-    if not os.path.exists(config.db_file): return {"error": "数据库不存在"}
+    if not os.path.exists(config.db_file): return {"error": "Database not found"}
     script_dir = os.path.dirname(os.path.abspath(__file__))
     now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     shutil.copy2(config.db_file, os.path.join(script_dir, f"translation_status_backup_{now}.db"))
@@ -174,7 +182,7 @@ def check_single_issue(item, issue_type):
 def translate_with_api(text, api_name=None, use_proxy=None, target_lang=None):
     if not text: return None
     api_key = api_name or DEFAULT_API
-    if api_key not in TRANSLATION_APIS: return "未找到翻译引擎"
+    if api_key not in TRANSLATION_APIS: return "Translation engine not found"
     
     # 保留换行符：将 \n 替换为占位符，AI 翻译后再还原
     text_for_translate = text.replace('\n', '{{NEWLINE}}')
@@ -184,7 +192,7 @@ def translate_with_api(text, api_name=None, use_proxy=None, target_lang=None):
         
         if api_key == "groq":
             api_key_groq = api_config.get("api_key", "")
-            if not api_key_groq: return "请先在设置中填写Groq API Key"
+            if not api_key_groq: return "Please configure Groq API Key in settings"
             
             model_name = api_config.get("model", DEFAULT_MODEL)
             base_url = api_config.get("url", "https://api.groq.com/openai/v1")
@@ -214,19 +222,19 @@ def translate_with_api(text, api_name=None, use_proxy=None, target_lang=None):
                 result = resp.json()
                 content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
                 translation = content.replace('{{NEWLINE}}', '\n') if content else ""
-                return translation or "AI返回内容为空"
+                return translation or "AI returned empty"
             else:
                 error = resp.json().get("error", {}).get("message", resp.text[:200])
-                return f"翻译失败: HTTP {resp.status_code} - {error}"
+                return f"Translation failed: HTTP {resp.status_code} - {error}"
     except requests.exceptions.Timeout as e:
-        return "翻译请求超时: " + str(e)[:100]
+        return "Translation request timeout: " + str(e)[:100]
     except requests.exceptions.ProxyError as e:
         return "Proxy connection failed: " + str(e)[:100]
     except UnicodeEncodeError as e:
         return "Translation encoding error: " + str(e)
     except Exception as e:
         return "Translation failed: " + str(e)
-    return "翻译服务暂不可用"
+    return "Translation service unavailable"
 
 def load_template():
     try:
@@ -234,13 +242,13 @@ def load_template():
         with open(os.path.join(script_dir, 'templates', 'index.html'), 'r', encoding='utf-8') as f:
             return f.read()
     except Exception as e:
-        logger.error(f"加载模板失败: {e}")
-        return "<html><body><h1>模板加载失败</h1></body></html>"
+        logger.error(f"Template load failed: {e}")
+        return "<html><body><h1>Template load failed</h1></body></html>"
 
 try:
     HTML_TEMPLATE = load_template().replace('content="20240416"', 'content="' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '"').replace('翻译质量检查工具', '{{SYSTEM_TITLE}}')
 except Exception:
-    HTML_TEMPLATE = "<html><body><h1>模板加载失败</h1></body></html>"
+    HTML_TEMPLATE = "<html><body><h1>Template load failed</h1></body></html>"
 
 def load_settings_template():
     try:
@@ -248,13 +256,13 @@ def load_settings_template():
         with open(os.path.join(script_dir, 'templates', 'settings.html'), 'r', encoding='utf-8') as f:
             return f.read()
     except Exception as e:
-        logger.error(f"加载设置模板失败: {e}")
-        return "<html><body><h1>设置模板加载失败</h1></body></html>"
+        logger.error(f"Settings template load failed: {e}")
+        return "<html><body><h1>Settings template load failed</h1></body></html>"
 
 try:
     SETTINGS_TEMPLATE = load_settings_template().replace('content="20240416"', 'content="' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '"').replace('翻译质量检查工具', '{{SYSTEM_TITLE}}')
 except Exception:
-    SETTINGS_TEMPLATE = "<html><body><h1>设置模板加载失败</h1></body></html>"
+    SETTINGS_TEMPLATE = "<html><body><h1>Settings template load failed</h1></body></html>"
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args): pass
@@ -288,7 +296,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(content.encode('utf-8'))
             except Exception as e:
-                logger.error(f"加载教程页面失败: {e}")
+                logger.error(f"Tutorial page load failed: {e}")
                 self.send_error(500)
         elif self.path.startswith('/api/all'):
             try:
@@ -301,7 +309,7 @@ class Handler(BaseHTTPRequestHandler):
                 items = [{"file": e["file"], "index": e["index"], "item": e["item"], "issues": []} for e in all_items[start:end]]
                 self.send_json({"total": total, "page": page, "size": size, "items": items})
             except (ValueError, KeyError) as e:
-                logger.error(f"分页参数错误: {e}")
+                logger.error(f"Pagination parameter error: {e}")
                 self.send_json({"error": "Invalid pagination parameters"})
         elif self.path == '/api/models': self.send_json({"models": []})
         elif self.path == '/api/translation-apis': self.send_json({"apis": [{"key": k, "name": v.get("name", k)} for k, v in TRANSLATION_APIS.items()], "default": DEFAULT_API})
@@ -310,11 +318,28 @@ class Handler(BaseHTTPRequestHandler):
             api_config = TRANSLATION_APIS.get("groq", {})
             has_key = bool(api_config.get("api_key", ""))
             self.send_json({
-                "configured": has_key, 
+                "configured": has_key,
                 "has_key": has_key,
                 "model": api_config.get("model", DEFAULT_MODEL),
-                "target_lang": api_config.get("target_lang", "zh-Hans")
+                "target_lang": api_config.get("target_lang", "zh-Hans"),
+                "language": api_config.get("language", "en")
             })
+        elif self.path.startswith('/api/language'):
+            action = urllib.parse.parse_qs(self.path.split('?')[1] if '?' in self.path else '').get('action', ['get'])[0]
+            current_lang = TRANSLATION_APIS.get("groq", {}).get("language", "en")
+            if action == 'get':
+                self.send_json({"language": current_lang})
+            elif action == 'set':
+                new_lang = urllib.parse.parse_qs(self.path.split('?')[1] if '?' in self.path else '').get('language', ['en'])[0]
+                if new_lang in LANG_MAP or new_lang == "zh-Hans" or new_lang == "zh-Hant":
+                    current_lang = new_lang
+                    TRANSLATION_APIS["groq"]["language"] = new_lang
+                    with sqlite3.connect(config.db_file) as conn:
+                        conn.execute("UPDATE groq_config SET language=? WHERE id=1", (new_lang,))
+                        conn.commit()
+                    self.send_json({"success": True, "language": new_lang})
+                else:
+                    self.send_json({"error": "Invalid language"})
         elif self.path == '/api/proxy/status':
             self.send_json({"enabled": config.use_proxy})
         elif self.path.startswith('/api/next'):
@@ -402,7 +427,7 @@ class Handler(BaseHTTPRequestHandler):
                     conn.commit()
                 self.send_json({"success": True, "updated": updated})
             except Exception as e:
-                logger.error(f"同步原文失败: {e}")
+                logger.error(f"Sync JP failed: {e}")
                 self.send_json({"error": str(e)})
         elif self.path == '/api/db/sync-cn':
             try:
@@ -421,7 +446,7 @@ class Handler(BaseHTTPRequestHandler):
                     conn.commit()
                 self.send_json({"success": True, "updated": updated})
             except Exception as e:
-                logger.error(f"同步翻译失败: {e}")
+                logger.error(f"Sync CN failed: {e}")
                 self.send_json({"error": str(e)})
         elif self.path == '/api/filter':
             rules = data.get("rules", [])
@@ -460,13 +485,17 @@ class Handler(BaseHTTPRequestHandler):
                     with open(config.data_file, 'w', encoding='utf-8') as f:
                         json.dump(table_data, f, ensure_ascii=False, indent=2)
             except Exception as e:
-                logger.error(f"更新 table.json 失败: {e}")
+                logger.error(f"Update table.json failed: {e}")
             
             cache.clear()
             self.send_json({"success": True})
         elif self.path == '/api/translate': self.send_json({"translation": translate_with_api(data.get("text", ""), data.get("api", DEFAULT_API), data.get("useProxy"), data.get("targetLang"))})
-        elif self.path == '/api/groq/config': 
-            save_groq_config(data.get("apiKey", ""), data.get("model", DEFAULT_MODEL), data.get("targetLang", "zh-Hans"))
+        elif self.path == '/api/groq/config':
+            api_key = data.get("apiKey") or TRANSLATION_APIS["groq"].get("api_key", "")
+            model = data.get("model") or TRANSLATION_APIS["groq"].get("model", DEFAULT_MODEL)
+            target_lang = data.get("targetLang") or TRANSLATION_APIS["groq"].get("target_lang", "zh-Hans")
+            language = data.get("language") or TRANSLATION_APIS["groq"].get("language", "en")
+            save_groq_config(api_key, model, target_lang, language)
             self.send_json({"success": True})
         elif self.path == '/api/proxy/config': config.use_proxy = data.get("enabled", False); self.send_json({"success": True, "enabled": config.use_proxy})
         else: self.send_error(404)
@@ -474,12 +503,12 @@ class Handler(BaseHTTPRequestHandler):
 def run_server(port=None):
     port = port or config.server_port
     server = HTTPServer(('0.0.0.0', port), Handler)
-    logger.info(f"服务已启动: http://localhost:{port}")
-    print("按 Ctrl+C 停止服务", flush=True)
+    logger.info(f"Server started: http://localhost:{port}")
+    print("Press Ctrl+C to stop", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\n服务已停止", flush=True)
+        print("\nServer stopped", flush=True)
         server.shutdown()
 
 if __name__ == "__main__":
@@ -489,7 +518,7 @@ if __name__ == "__main__":
         load_groq_config()
         load_all_data()
     except Exception as e:
-        print(f"初始化失败: {e}", flush=True)
+        print(f"Init failed: {e}", flush=True)
         sys.exit(1)
     
     port = int(sys.argv[sys.argv.index("--port") + 1]) if "--port" in sys.argv else None

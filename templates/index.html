@@ -85,59 +85,171 @@
 </head>
 <body>
     <div class="container">
-        <h1 style="display:inline-block;margin-right:20px;">翻译质量检查工具</h1>
+        <h1 id="page-title" style="display:inline-block;margin-right:20px;">Translation Quality Check Tool</h1>
         <div class="toolbar">
-            <button class="btn-sync-jp" onclick="syncJpFromSource()">同步原文</button>
-            <button class="btn-sync-cn" onclick="syncCnFromSource()">同步翻译</button>
-            <a href="/settings.html" class="btn btn-settings">⚙ 设置</a>
-            <a href="/tutorial.html" target="_blank" class="btn btn-tutorial" style="text-decoration: none;">📖 查看教程</a>
+            <button class="btn-sync-jp" onclick="syncJpFromSource()">Sync Original</button>
+            <button class="btn-sync-cn" onclick="syncCnFromSource()">Sync Translation</button>
+            <a href="/settings.html" class="btn btn-settings">⚙ Settings</a>
+            <a href="/tutorial.html" target="_blank" class="btn btn-tutorial" style="text-decoration: none;">📖 Tutorial</a>
         </div>
-        <div style="color:#e74c3c;font-size:12px;margin-bottom:15px;">注意：同步即从原文件里重新提取内容到数据库。此操作适用于外部覆盖源文件后同步，或数据库需要重新初始化时使用。</div>
-        
+        <div id="note-sync" style="color:#e74c3c;font-size:12px;margin-bottom:15px;">Note: Sync extracts content from source file to database. Use after external changes or when database needs re-init.</div>
+
         <div class="db-status" id="db-status">
-            加载中...
+            Loading...
         </div>
 
-        <div class="main-content">
+<div class="main-content">
             <div class="sidebar">
                 <div class="jump-box">
-                    <div class="label">跳转</div>
-                    <input type="number" id="jump-input" placeholder="条号" min="1" onkeydown="if(event.key==='Enter')jumpToItem()">
-                    <button onclick="jumpToItem()">跳转</button>
+                    <div class="label" id="label-jump">Jump</div>
+                    <input type="number" id="jump-input" placeholder="ID" min="1" onkeydown="if(event.key==='Enter')jumpToItem()">
+                    <button onclick="jumpToItem()">Jump</button>
                 </div>
                 <div class="search-box">
-                    <div class="label">搜索</div>
-                    <input type="text" id="search-input" placeholder="搜索原文或翻译" onkeydown="if(event.key==='Enter')nextSearch()">
-                    <button onclick="nextSearch()">搜索</button>
+                    <div class="label" id="label-search">Search</div>
+                    <input type="text" id="search-input" placeholder="Search JP or CN" onkeydown="if(event.key==='Enter')nextSearch()">
+                    <button onclick="nextSearch()">Search</button>
                 </div>
                 <div class="search-box" style="margin-top: 10px;">
-                    <div class="label">过滤</div>
-                    <label class="filter-item"><input type="checkbox" id="show-fixed">显示已确认</label>
-                    <label class="filter-item"><input type="checkbox" id="filter-long-cn">翻译过长</label>
-                    <button onclick="applyFilter()" style="width:100%;margin-top:8px;padding:6px;background:#3498db;color:#fff;border:none;border-radius:4px;cursor:pointer;">确认</button>
+                    <div class="label" id="label-filter">Filter</div>
+                    <label class="filter-item"><input type="checkbox" id="show-fixed">Show Confirmed</label>
+                    <label class="filter-item"><input type="checkbox" id="filter-long-cn">Too Long</label>
+                    <button onclick="applyFilter()" style="width:100%;margin-top:8px;padding:6px;background:#3498db;color:#fff;border:none;border-radius:4px;cursor:pointer;">Apply</button>
                 </div>
-</div>
-             
+        </div>
+
              <div class="list-panel">
                  <div class="header">
                      <div class="col-id">ID</div>
-                     <div class="col-jp">原文</div>
+                     <div class="col-jp">JP</div>
                  </div>
                  <div id="issue-list"></div>
              </div>
-             
+
              <div class="translation-area">
-                <div id="issues-list"></div>
-            </div>
+                 <div id="issues-list"></div>
+             </div>
         </div>
     </div>
-    
+
     <div class="nav">
-        <button onclick="prevItem()">← 上一条</button>
-        <button onclick="nextItem()">下一条 →</button>
+        <button onclick="prevItem()">← Previous</button>
+        <button onclick="nextItem()">Next →</button>
     </div>
     
     <script>
+        const i18n = {
+            en: {
+                title: "Translation Quality Check Tool",
+                sync_jp: "Sync Original",
+                sync_cn: "Sync Translation",
+                settings: "Settings",
+                tutorial: "Tutorial",
+                note_sync: "Note: Sync extracts content from source file to database. Use after external changes or when database needs re-init.",
+                jump: "Jump",
+                search: "Search",
+                filter: "Filter",
+                show_fixed: "Show Confirmed",
+                too_long: "Too Long",
+                confirm_btn: "Confirm",
+                original: "Original (JP)",
+                current_cn: "Current Translation (CN)",
+                ai_suggest: "AI Suggestion",
+                refresh: "Refresh",
+                copy: "Copy",
+                editor: "Editor",
+                char_count: "Chars",
+                save_next: "Save & Next",
+                prev: "Previous",
+                next: "Next",
+                loading: "Loading...",
+                empty: "(Empty)",
+                no_original: "(No JP)",
+                not_fixed: "Not Fixed",
+                fixed: "Fixed",
+                no_records: "No records",
+                all_done: "All translations confirmed!",
+                enter_id: "ID",
+                filter_search: "Search JP or CN",
+                id: "ID",
+                file: "File",
+                index: "Index",
+                option_a: "Option A -",
+                option_b: "Option B -",
+                translate_svc_empty: "Translation returned empty",
+                translate_failed: "Translation failed:",
+                err_jp_empty: "No JP text",
+                err_cn_empty: "Please enter translation",
+                err_cn_too_long: "Max 5000 chars",
+                copied: "Copied",
+                copy_failed: "Copy failed",
+                invalid_id: "Invalid ID",
+                no_data: "No data",
+                no_match: "No match",
+                total: "Total",
+                translated: "Translated",
+                confirmed: "Confirmed",
+                pending: "Pending"
+            },
+            zh: {
+                title: "翻译质量检查工具",
+                sync_jp: "同步原文",
+                sync_cn: "同步翻译",
+                settings: "设置",
+                tutorial: "查看教程",
+                note_sync: "注意：同步即从原文件里重新提取内容到数据库。此操作适用于外部覆盖源文件后同步，或数据库需要重新初始化时使用。",
+                jump: "跳转",
+                search: "搜索",
+                filter: "过滤",
+                show_fixed: "显示已确认",
+                too_long: "翻译过长",
+                confirm_btn: "确认",
+                original: "原文 (jp):",
+                current_cn: "当前翻译 (cn)",
+                ai_suggest: "AI建议",
+                refresh: "刷新",
+                copy: "复制",
+                editor: "编辑区:",
+                char_count: "字数",
+                save_next: "保存→跳转",
+                prev: "上一条",
+                next: "下一条",
+                loading: "加载中...",
+                empty: "(空)",
+                no_original: "(无原文)",
+                not_fixed: "未确认",
+                fixed: "已确认",
+                no_records: "暂无记录",
+                all_done: "全部翻译已确认完成！",
+                enter_id: "条号",
+                filter_search: "搜索原文或翻译",
+                id: "ID",
+                file: "文件",
+                index: "索引",
+                option_a: "选项 A -",
+                option_b: "选项 B -",
+                translate_svc_empty: "翻译服务返回为空",
+                translate_failed: "翻译请求失败:",
+                err_jp_empty: "无原文",
+                err_cn_empty: "请先填写翻译内容",
+                err_cn_too_long: "翻译内容过长，请控制在5000字以内",
+                copied: "已复制到剪贴板",
+                copy_failed: "复制失败",
+                invalid_id: "请输入有效的ID",
+                no_data: "当前没有数据",
+                no_match: "在当前过滤范围内未找到匹配结果",
+                total: "总记录数",
+                translated: "已翻译",
+                confirmed: "已确认",
+                pending: "待确认"
+            }
+        };
+
+        let currentLang = 'en';
+        function t(key) {
+            return i18n[currentLang]?.[key] || i18n['en']?.[key] || key;
+        }
+
         const state = {
             currentIdx: 0,
             issues: [],
@@ -187,8 +299,41 @@
         }
         
         async function init() {
+            try {
+                const resp = await fetch('/api/groq/status');
+                const data = await resp.json();
+                currentLang = data.language || 'en';
+            } catch (e) {
+                currentLang = 'en';
+            }
+            applyI18n();
             await loadDbStatus();
             await loadIssues();
+        }
+
+        function applyI18n() {
+            try {
+                const el = (id) => document.getElementById(id);
+                if (el('page-title')) el('page-title').textContent = t('title');
+                if (el('note-sync')) el('note-sync').textContent = t('note_sync');
+                if (el('label-jump')) el('label-jump').textContent = t('jump');
+                if (el('jump-input')) el('jump-input').placeholder = t('enter_id');
+                if (el('label-search')) el('label-search').textContent = t('search');
+                if (el('search-input')) el('search-input').placeholder = t('filter_search');
+                if (el('label-filter')) el('label-filter').textContent = t('filter');
+                if (el('show-fixed')) el('show-fixed').nextSibling.textContent = ' ' + t('show_fixed');
+                if (el('filter-long-cn')) el('filter-long-cn').nextSibling.textContent = ' ' + t('too_long');
+                const btns = document.querySelectorAll('.btn-sync-jp, .btn-sync-cn, .btn-settings, .btn-tutorial');
+                if (btns[0]) btns[0].textContent = t('sync_jp');
+                if (btns[1]) btns[1].textContent = t('sync_cn');
+                if (btns[2]) btns[2].textContent = '⚙ ' + t('settings');
+                if (btns[3]) btns[3].textContent = '📖 ' + t('tutorial');
+                const nb = document.querySelectorAll('.nav button');
+                if (nb[0]) nb[0].textContent = '← ' + t('prev');
+                if (nb[1]) nb[1].textContent = t('next') + ' →';
+            } catch(e) {
+                console.error('i18n error:', e);
+            }
         }
         
         async function loadIssues() {
@@ -361,99 +506,99 @@
                 const el = document.getElementById('db-status');
                 if (data.exists) {
                     const unfixed = data.total - data.fixed;
-                    el.innerHTML = `<span class="stat">总记录数: <span class="stat-num">${data.total}</span></span><span class="stat">已翻译: <span class="stat-num">${data.translated}</span></span><span class="stat">已确认: <span class="stat-num">${data.fixed}</span></span><span class="stat">待确认: <span class="stat-num">${unfixed}</span></span>`;
+                    el.innerHTML = `<span class="stat">${t('total')}: <span class="stat-num">${data.total}</span></span><span class="stat">${t('translated')}: <span class="stat-num">${data.translated}</span></span><span class="stat">${t('confirmed')}: <span class="stat-num">${data.fixed}</span></span><span class="stat">${t('pending')}: <span class="stat-num">${unfixed}</span></span>`;
                 } else {
-                    el.innerHTML = `<span class="stat">数据库: 未建立</span>`;
+                    el.innerHTML = `<span class="stat">DB: ${t('no_data')}</span>`;
                 }
             } catch (e) {
-                console.error('加载数据库状态失败:', e);
+                console.error('DB status error:', e);
             }
         }
         
         async function initDb() {
             const btn = document.querySelector('button[onclick="initDb()"]');
-            btn.textContent = '同步中...';
+            btn.textContent = '...';
             btn.disabled = true;
             try {
                 const resp = await fetch('/api/db/init', {method: 'POST'});
                 const data = await resp.json();
-                btn.textContent = '建立数据库';
+                btn.textContent = 'Init DB';
                 btn.disabled = false;
-                alert(data.inserted + '条插入, ' + data.updated + '条更新');
+                alert(data.inserted + ' inserted, ' + data.updated + ' updated');
                 await loadDbStatus();
             } catch (e) {
-                btn.textContent = '建立数据库';
+                btn.textContent = 'Init DB';
                 btn.disabled = false;
-                console.error('初始化数据库失败:', e);
+                console.error('Init DB error:', e);
             }
         }
-        
+
         async function backupDb() {
             try {
                 const resp = await fetch('/api/db/backup', {method: 'POST'});
                 const data = await resp.json();
                 if (data.success) {
-                    alert('备份成功: ' + data.path);
+                    alert('Backup OK: ' + data.path);
                 } else {
-                    alert('备份失败: ' + data.error);
+                    alert('Backup failed: ' + data.error);
                 }
             } catch (e) {
-                console.error('备份失败:', e);
-                alert('备份失败: ' + e.message);
+                console.error('Backup error:', e);
+                alert('Backup failed: ' + e.message);
             }
         }
-        
+
         async function syncJpFromSource() {
             const btn = document.querySelector('button[onclick="syncJpFromSource()"]');
-            btn.textContent = '同步中...';
+            btn.textContent = '...';
             btn.disabled = true;
             try {
                 const resp = await fetch('/api/db/sync-jp', {method: 'POST'});
                 const data = await resp.json();
-                btn.textContent = '同步原文';
+                btn.textContent = t('sync_jp');
                 btn.disabled = false;
                 if (data.success) {
-                    alert('同步原文完成: ' + data.updated + ' 条');
+                    alert('Sync OK: ' + data.updated + ' entries');
                 } else {
-                    alert('同步失败: ' + data.error);
+                    alert('Sync failed: ' + data.error);
                 }
             } catch (e) {
-                btn.textContent = '同步原文';
+                btn.textContent = t('sync_jp');
                 btn.disabled = false;
-                console.error('同步原文失败:', e);
-                alert('同步失败: ' + e.message);
+                console.error('Sync error:', e);
+                alert('Sync failed: ' + e.message);
             }
         }
-        
+
         async function syncCnFromSource() {
-            if (!confirm('同步翻译将覆盖数据库中已修改的内容，确定继续？')) {
+            if (!confirm('Sync will overwrite changes. Continue?')) {
                 return;
             }
             const btn = document.querySelector('button[onclick="syncCnFromSource()"]');
-            btn.textContent = '同步中...';
+            btn.textContent = '...';
             btn.disabled = true;
             try {
                 const resp = await fetch('/api/db/sync-cn', {method: 'POST'});
                 const data = await resp.json();
-                btn.textContent = '同步翻译';
+                btn.textContent = t('sync_cn');
                 btn.disabled = false;
                 if (data.success) {
-                    alert('同步翻译完成: ' + data.updated + ' 条');
+                    alert('Sync OK: ' + data.updated + ' entries');
                 } else {
-                    alert('同步失败: ' + data.error);
+                    alert('Sync failed: ' + data.error);
                 }
             } catch (e) {
-                btn.textContent = '同步翻译';
+                btn.textContent = t('sync_cn');
                 btn.disabled = false;
-                console.error('同步翻译失败:', e);
-                alert('同步失败: ' + e.message);
+                console.error('Sync error:', e);
+                alert('Sync failed: ' + e.message);
             }
         }
         
         function renderItem() {
             const s = state;
             if (s.issues.length === 0) {
-                const msg = s.showAll ? '暂无记录' : '全部翻译已确认完成！';
+                const msg = s.showAll ? t('no_records') : t('all_done');
                 document.getElementById('issues-list').innerHTML = '<p>' + msg + '</p>';
                 return;
             }
@@ -465,31 +610,33 @@
             const currentCn = item.cn || '';
             s.currentJpText = item.jp || '';
             const isFixed = issue.is_fixed === 1;
-            const idTag = isFixed 
-                ? `<span style="background:#27ae60;color:#fff;padding:2px 6px;border-radius:4px;margin-right:5px;">已确认</span>` 
-                : `<span style="background:#e67e22;color:#fff;padding:2px 6px;border-radius:4px;margin-right:5px;">未确认</span>`;
+            const fixedLabel = isFixed ? t('fixed') : t('not_fixed');
+            const idTag = isFixed
+                ? `<span style="background:#27ae60;color:#fff;padding:2px 6px;border-radius:4px;margin-right:5px;">${fixedLabel}</span>`
+                : `<span style="background:#e67e22;color:#fff;padding:2px 6px;border-radius:4px;margin-right:5px;">${fixedLabel}</span>`;
+            const copyBtn = t('copy');
             document.getElementById('issues-list').innerHTML = `
                 <div class="issue-item">
-                    <div class="meta">ID: ${idTag}${issue.id} | 文件: ${issue.file} | 索引: ${issue.index}</div>
-                    <div class="label">原文 (jp):</div>
-                    <div class="jp">${escapeHtml(item.jp) || '(空)'}</div>
-                    
+                    <div class="meta">${t('id')}: ${idTag}${issue.id} | ${t('file')}: ${issue.file} | ${t('index')}: ${issue.index}</div>
+                    <div class="label">${t('original')}</div>
+                    <div class="jp">${escapeHtml(item.jp) || t('empty')}</div>
+
                     <div class="option-section">
-                        <div class="label">选项 A - 当前翻译 (cn): <button class="btn-small" onclick="copyToEditor('current')">📋复制</button></div>
-                        <div class="option-content" id="current-cn">${escapeHtml(currentCn) || '(空)'}</div>
+                        <div class="label">${t('option_a')} ${t('current_cn')}: <button class="btn-small" onclick="copyToEditor('current')">${copyBtn}</button></div>
+                        <div class="option-content" id="current-cn">${escapeHtml(currentCn) || t('empty')}</div>
                     </div>
-                    
-                    <div class="label">选项 B - AI建议: <button class="btn-small" onclick="refreshAISuggestion()">🔄刷新</button> <button class="btn-small" onclick="copyToEditor('ai')">📋复制</button> <span id="ai-loading" style="font-size:12px;color:#999;"></span></div>
-                    <div class="option-content" id="ai-suggestion">(加载中...)</div>
-                    
-                    <div class="label">编辑区:</div>
+
+                    <div class="label">${t('option_b')} ${t('ai_suggest')}: <button class="btn-small" onclick="refreshAISuggestion()">🔄${t('refresh')}</button> <button class="btn-small" onclick="copyToEditor('ai')">${copyBtn}</button> <span id="ai-loading" style="font-size:12px;color:#999;"></span></div>
+                    <div class="option-content" id="ai-suggestion">${t('loading')}</div>
+
+                    <div class="label">${t('editor')}</div>
                     <div class="ai-row">
                         <textarea id="editor-textarea" rows="3" oninput="updateCharCount()">${escapeHtml(currentCn)}</textarea>
-                        <button class="btn-copy" onclick="copyFromEditor()" title="复制">📋复制</button>
+                        <button class="btn-copy" onclick="copyFromEditor()" title="${copyBtn}">${copyBtn}</button>
                     </div>
-                    <div id="char-count" style="font-size:12px;color:#999;margin-top:5px;">字数: ${currentCn.length}</div>
+                    <div id="char-count" style="font-size:12px;color:#999;margin-top:5px;">${t('char_count')}: ${currentCn.length}</div>
                     <div class="btn-row">
-                        <button class="btn-save" onclick="saveAndNext()">保存→跳转</button>
+                        <button class="btn-save" onclick="saveAndNext()">${t('save_next')}</button>
                     </div>
                 </div>
 `;
@@ -503,12 +650,12 @@
         
         async function loadAISuggestion(text) {
             if (!text) {
-                document.getElementById('ai-suggestion').textContent = '(无原文)';
+                document.getElementById('ai-suggestion').textContent = t('no_original');
                 return;
             }
             const loadingEl = document.getElementById('ai-loading');
             const suggestionEl = document.getElementById('ai-suggestion');
-            loadingEl.textContent = '(加载中...)';
+            loadingEl.textContent = t('loading');
             try {
                 const targetLang = document.getElementById('target-lang')?.value || 'zh-Hans';
                 const resp = await fetchWithTimeout('/api/translate', {
@@ -521,13 +668,13 @@
                     suggestionEl.textContent = data.translation;
                     suggestionEl.classList.remove('error');
                 } else {
-                    suggestionEl.textContent = '(翻译服务返回为空)';
+                    suggestionEl.textContent = t('translate_svc_empty');
                     suggestionEl.classList.add('error');
                 }
             } catch (e) {
-                suggestionEl.textContent = '(翻译请求失败: ' + e.message + ')';
+                suggestionEl.textContent = t('translate_failed') + ' ' + e.message;
                 suggestionEl.classList.add('error');
-                console.error('翻译请求失败:', e);
+                console.error('Translation error:', e);
             }
             loadingEl.textContent = '';
         }
@@ -545,34 +692,34 @@
             const editor = document.getElementById('editor-textarea');
             if (editor && editor.value) {
                 navigator.clipboard.writeText(editor.value).then(() => {
-                    alert('已复制到剪贴板');
+                    alert(t('copied'));
                 }).catch(() => {
-                    alert('复制失败');
+                    alert(t('copy_failed'));
                 });
             }
         }
-        
+
         async function saveAndReload(cn) {
             const s = state;
             const issue = s.issues[s.currentIdx];
             const savedFile = issue.file;
             const savedIndex = issue.index;
-            
+
             const resp = await fetch('/api/update', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({file: savedFile, index: savedIndex, cn: cn || ''})
             });
             const data = await resp.json();
-            
+
             if (data.success) {
                 await loadDbStatus();
-                
+
                 if (s.currentIdx < s.issues.length) {
                     s.issues[s.currentIdx].item.cn = cn || '';
                     s.issues[s.currentIdx].is_fixed = 1;
                 }
-                
+
                 if (s.currentIdx < s.issues.length - 1) {
                     s.currentIdx++;
                 } else if (s.currentIdx > 0) {
@@ -582,15 +729,15 @@
                 renderItem();
             }
         }
-        
+
         async function saveAndNext() {
             const cn = document.getElementById('editor-textarea').value.trim();
             if (!cn) {
-                alert('请先填写翻译内容');
+                alert(t('err_cn_empty'));
                 return;
             }
             if (cn.length > 5000) {
-                alert('翻译内容过长，请控制在5000字以内');
+                alert(t('err_cn_too_long'));
                 return;
             }
             await saveAndReload(cn);

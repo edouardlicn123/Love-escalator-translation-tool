@@ -1,5 +1,5 @@
 #!/bin/bash
-# 翻译质量检查工具 - 启动脚本
+# Translation Quality Check Tool - Startup Script
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -28,25 +28,25 @@ enable_proxy() {
 }
 
 install_deps() {
-    echo "正在安装依赖..."
-    
+    echo "Installing dependencies..."
+
     if ! python3 -c "import requests" 2>/dev/null; then
         python3 -m pip install --upgrade pip --break-system-packages 2>/dev/null
         pip3 install requests pysocks --break-system-packages 2>/dev/null
-        echo "✓ requests, pysocks 已安装"
+        echo "✓ requests, pysocks installed"
     else
-        echo "✓ 依赖已安装"
+        echo "✓ Dependencies installed"
     fi
 }
 
 init_db() {
-    echo "正在初始化数据库..."
-    
+    echo "Initializing database..."
+
     if [ ! -f "$DATA_FILE" ]; then
-        echo "✗ 错误: table.json 不存在"
+        echo "✗ Error: table.json not found"
         return 1
     fi
-    
+
     python3 -c "
 import sys
 sys.path.insert(0, '.')
@@ -56,148 +56,148 @@ check_translation.DB_FILE = '$DB_FILE'
 check_translation.CONFIG_FILE = '$CONFIG_FILE'
 check_translation.load_config()
 result = check_translation.sync_db()
-print(f'✓ 插入: {result[\"inserted\"]} 条')
-print(f'✓ 更新: {result[\"updated\"]} 条')
+print(f'✓ Inserted: {result[\"inserted\"]} entries')
+print(f'✓ Updated: {result[\"updated\"]} entries')
 "
 }
 
 start_server() {
-    echo "正在启动服务器..."
-    
+    echo "Starting server..."
+
     if ! python3 -c "import requests" 2>/dev/null; then
-        echo "⚠ 警告: requests 未安装，请先运行选项2安装依赖"
-        read -p "继续? (y/n): " confirm
+        echo "⚠ Warning: requests not installed, run option 2 first"
+        read -p "Continue? (y/n): " confirm
         [ "$confirm" != "y" ] && return
     fi
-    
+
     if ! python3 -c "import sqlite3" 2>/dev/null; then
-        echo "✗ 错误: sqlite3 不可用"
+        echo "✗ Error: sqlite3 not available"
         return 1
     fi
-    
+
     if [ ! -f "$DATA_FILE" ]; then
-        echo "✗ 错误: table.json 不存在，无法加载翻译数据"
-        read -p "继续? (y/n): " confirm
+        echo "✗ Error: table.json not found, cannot load translation data"
+        read -p "Continue? (y/n): " confirm
         [ "$confirm" != "y" ] && return
     fi
-    
+
     if ! python3 -c "import check_translation" 2>/dev/null; then
-        echo "✗ 错误: check_translation.py 加载失败"
+        echo "✗ Error: check_translation.py failed to load"
         return 1
     fi
-    
+
     enable_proxy
     exec python3 check_translation.py --port $PORT
 }
 
 copy_table() {
-    echo "正在复制 table.json..."
-    
+    echo "Copying table.json..."
+
     TARGET_DIR="/home/edo/loveEscalatorTL"
     TARGET_FILE="$TARGET_DIR/table.json"
-    
+
     if [ ! -f "$DATA_FILE" ]; then
-        echo "✗ 错误: table.json 不存在"
+        echo "✗ Error: table.json not found"
         return 1
     fi
-    
+
     if [ -f "$TARGET_FILE" ]; then
-        echo "⚠ 目标文件已存在: $TARGET_FILE"
-        echo -n "是否覆盖? (y/n): "
+        echo "⚠ Target file already exists: $TARGET_FILE"
+        echo -n "Overwrite? (y/n): "
         read confirm
         if [ "$confirm" != "y" ]; then
-            echo "已取消"
+            echo "Cancelled"
             return 0
         fi
     fi
-    
+
     if [ ! -d "$TARGET_DIR" ]; then
         mkdir -p "$TARGET_DIR"
     fi
-    
+
     cp "$DATA_FILE" "$TARGET_FILE"
-    
+
     if [ $? -eq 0 ]; then
-        echo "✓ 已复制到 $TARGET_FILE"
+        echo "✓ Copied to $TARGET_FILE"
     else
-        echo "✗ 复制失败"
+        echo "✗ Copy failed"
     fi
 }
 
 kill_server() {
-    echo "正在杀死进程..."
+    echo "Killing process..."
     pkill -f "check_translation.py" 2>/dev/null
     sleep 1
-    echo "✓ 进程已终止"
+    echo "✓ Process terminated"
 }
 
 show_status() {
     echo ""
-    echo "状态检查:"
+    echo "Status Check:"
     echo "----------------------------------------"
-    
+
     if python3 -c "import requests" 2>/dev/null; then
-        echo "requests: ✓ 已安装"
+        echo "requests: ✓ installed"
     else
-        echo "requests: ✗ 未安装"
+        echo "requests: ✗ not installed"
     fi
-    
+
     if python3 -c "import sqlite3" 2>/dev/null; then
-        echo "sqlite3: ✓ 可用"
+        echo "sqlite3: ✓ available"
     else
-        echo "sqlite3: ✗ 不可用"
+        echo "sqlite3: ✗ not available"
     fi
-    
+
     if [ -f "$DATA_FILE" ]; then
-        echo "table.json: ✓ 存在"
+        echo "table.json: ✓ exists"
     else
-        echo "table.json: ✗ 不存在"
+        echo "table.json: ✗ not found"
     fi
-    
+
     if [ -f "$DB_FILE" ]; then
         TOTAL=$(python3 -c "import sqlite3; print(sqlite3.connect('$DB_FILE').cursor().execute('SELECT COUNT(*) FROM translation_status').fetchone()[0])" 2>/dev/null)
         FIXED=$(python3 -c "import sqlite3; print(sqlite3.connect('$DB_FILE').cursor().execute('SELECT COUNT(*) FROM translation_status WHERE is_fixed=1').fetchone()[0])" 2>/dev/null)
-        echo "数据库: ✓ 已建立 ($TOTAL 条, $FIXED 条已修复)"
+        echo "Database: ✓ established ($TOTAL entries, $FIXED fixed)"
     else
-        echo "数据库: ✗ 未建立"
+        echo "Database: ✗ not established"
     fi
-    
+
     if check_proxy; then
-        echo "代理: ✓ 已启用"
+        echo "Proxy: ✓ enabled"
     else
-        echo "代理: ✗ 未启用"
+        echo "Proxy: ✗ not enabled"
     fi
 }
 
 show_menu() {
     clear
     echo "========================================"
-    echo "   翻译质量检查工具"
+    echo "   Translation Quality Check Tool"
     echo "========================================"
     echo ""
     show_status
     echo ""
-    echo "1. 启动服务"
-    echo "2. 安装依赖"
-    echo "3. 初始化数据库"
-    echo "4. 传输翻译文件"
-    echo "9. 杀死进程"
-    echo "0. 退出"
+    echo "1. Start Server"
+    echo "2. Install Dependencies"
+    echo "3. Initialize Database"
+    echo "4. Transfer Translation File"
+    echo "9. Kill Process"
+    echo "0. Exit"
     echo ""
-    echo -n "请选择: "
+    echo -n "Please select: "
 }
 
 while true; do
     show_menu
     read choice
-    
+
     case $choice in
         1) start_server ;;
-        2) install_deps; echo ""; read -p "按回车继续..." ;;
-        3) init_db; echo ""; read -p "按回车继续..." ;;
-        4) copy_table; echo ""; read -p "按回车继续..." ;;
-        9) kill_server; echo ""; read -p "按回车继续..." ;;
+        2) install_deps; echo ""; read -p "Press Enter to continue..." ;;
+        3) init_db; echo ""; read -p "Press Enter to continue..." ;;
+        4) copy_table; echo ""; read -p "Press Enter to continue..." ;;
+        9) kill_server; echo ""; read -p "Press Enter to continue..." ;;
         0) exit 0 ;;
-        *) echo "无效选择"; sleep 1 ;;
+        *) echo "Invalid selection"; sleep 1 ;;
     esac
 done
