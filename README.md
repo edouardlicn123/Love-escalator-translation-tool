@@ -228,6 +228,22 @@ This tool is designed for **PC-98 era games** (1990s Japanese visual novels) and
 - Visual novels with Japanese text requiring translation management
 - PC-98 era games that have been extracted to text format
 
+### Usage with loveEscalatorTL Project
+
+**This tool is designed to work with the [loveEscalatorTL](https://github.com/dantecsm/loveEscalatorTL) project.**
+
+The workflow is:
+1. Use **loveEscalatorTL** to extract text from the original PC-98 game files and generate the `table.json` file
+2. Use **this tool** to manage, review, and improve the translation quality
+3. The translated data can then be integrated back into the game using loveEscalatorTL
+
+### Extending to Other PC-98 Games
+
+Due to the general-purpose design of the data structure, this tool can also be used for:
+- Translation organization of other PC-98 visual novels
+- Translation data management using similar JSON formats
+- Any project requiring batch translation quality check
+
 ### Data Structure Requirements
 
 The tool expects `table.json` in the following format:

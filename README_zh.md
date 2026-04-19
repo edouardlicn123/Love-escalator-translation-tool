@@ -227,26 +227,16 @@ http://localhost:5382
 - 需要翻译管理的日本视觉小说
 - 已提取为文本格式的 PC-98 时代游戏
 
-### 数据结构要求
+### 配合 loveEscalatorTL 项目使用
 
-工具期望 `table.json` 如下格式：
+**本工具需要配合 [loveEscalatorTL](https://github.com/dantecsm/loveEscalatorTL) 项目一起使用。**
 
-```json
-{
-  "filename.eqa": [
-    {
-      "jp": "日语文本",
-      "cn": "中文翻译",
-      "jpHex": "...",
-      "cnHex": "...",
-      "startIdx": 123,
-      "endIdx": 456
-    }
-  ]
-}
-```
+工作流程如下：
+1. 使用 **loveEscalatorTL** 从原始 PC-98 游戏文件中提取文本，生成 `table.json` 文件
+2. 使用 **本工具** 管理、检查和改进翻译质量
+3. 翻译后的数据可以通过 loveEscalatorTL 重新集成回游戏中
 
-### 扩展到其他游戏
+### 扩展到其他 PC-98 游戏
 
 由于本工具的数据结构设计具有通用性，理论上可以用于：
 - 其他 PC-98 视觉小说的翻译整理
