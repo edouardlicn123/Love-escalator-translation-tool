@@ -194,11 +194,23 @@
         }
 
         async function setLanguage(lang) {
+            // 获取当前已有的配置，避免保存时被覆盖
+            const statusResp = await fetch('/api/groq/status');
+            const statusData = await statusResp.json();
+            const currentApiKey = statusData.has_api_key ? '(saved)' : '';
+            const currentModel = statusData.model || 'llama-3.3-70b-versatile';
+            const currentTargetLang = statusData.target_lang || 'zh-Hans';
+            
             try {
                 await fetch('/api/groq/config', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({language: lang})
+                    body: JSON.stringify({
+                        apiKey: currentApiKey,
+                        model: currentModel,
+                        targetLang: currentTargetLang,
+                        language: lang
+                    })
                 });
                 currentLang = lang;
                 applyI18n();

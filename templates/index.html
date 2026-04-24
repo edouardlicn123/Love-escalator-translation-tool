@@ -90,7 +90,7 @@
             <button class="btn-sync-jp" onclick="syncJpFromSource()">Sync Original</button>
             <button class="btn-sync-cn" onclick="syncCnFromSource()">Sync Translation</button>
             <a href="/settings.html" class="btn btn-settings">⚙ Settings</a>
-            <a href="/tutorial.html" target="_blank" class="btn btn-tutorial" style="text-decoration: none;">📖 Tutorial</a>
+            <a href="/tutorial.html?lang=" + state.language target="_blank" class="btn btn-tutorial" style="text-decoration: none;">📖 Tutorial</a>
         </div>
         <div id="note-sync" style="color:#e74c3c;font-size:12px;margin-bottom:15px;">Note: Sync extracts content from source file to database. Use after external changes or when database needs re-init.</div>
 
@@ -259,7 +259,8 @@
             filterLongCn: false,
             currentJpText: '',
             searchResults: [],
-            searchIdx: 0
+            searchIdx: 0,
+            language: 'en'
         };
         
         function escapeHtml(str) {
@@ -303,11 +304,15 @@
                 const resp = await fetch('/api/groq/status');
                 const data = await resp.json();
                 currentLang = data.language || 'en';
+                state.language = currentLang;
+                state.targetLang = data.target_lang || 'zh-Hans';
             } catch (e) {
                 currentLang = 'en';
+                state.targetLang = 'zh-Hans';
             }
             applyI18n();
             await loadDbStatus();
+            await loadSettings();
             await loadIssues();
         }
 
@@ -395,12 +400,7 @@
             try {
                 const resp = await fetch('/api/groq/status');
                 const data = await resp.json();
-                if (data.model) {
-                    document.getElementById('groq-model').value = data.model;
-                }
-                if (data.target_lang) {
-                    document.getElementById('target-lang').value = data.target_lang;
-                }
+                state.targetLang = data.target_lang || 'zh-Hans';
             } catch (e) {
                 console.error('加载设置失败:', e);
             }
@@ -462,40 +462,6 @@
                 }
             } catch (e) {
                 console.error('切换代理失败:', e);
-            }
-        }
-        
-        async function saveSettings() {
-            const apiKeyInput = document.getElementById('groq-api-key');
-            const model = document.getElementById('groq-model').value;
-            const targetLang = document.getElementById('target-lang').value;
-            const useProxy = document.getElementById('use-proxy').checked;
-            let apiKey = apiKeyInput.value;
-            if (!apiKey && state.savedApiKey) {
-                apiKey = state.savedApiKey;
-            }
-            try {
-                const resp = await fetch('/api/groq/config', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({apiKey, model, targetLang})
-                });
-                const result = await resp.json();
-                
-                await fetch('/api/proxy/config', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({enabled: useProxy})
-                });
-                
-                if (result.success) {
-                    await checkGroqStatus();
-                    await loadSettings();
-                    await toggleProxy();
-                    alert('设置已保存！');
-                }
-            } catch (e) {
-                console.error('保存设置失败:', e);
             }
         }
         
@@ -657,11 +623,10 @@
             const suggestionEl = document.getElementById('ai-suggestion');
             loadingEl.textContent = t('loading');
             try {
-                const targetLang = document.getElementById('target-lang')?.value || 'zh-Hans';
                 const resp = await fetchWithTimeout('/api/translate', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({text: text, useProxy: state.useProxy, targetLang: targetLang})
+                    body: JSON.stringify({text: text, useProxy: state.useProxy, targetLang: state.targetLang})
                 });
                 const data = await resp.json();
                 if (data.translation) {

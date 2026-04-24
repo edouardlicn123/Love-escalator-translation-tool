@@ -201,10 +201,17 @@ def translate_with_api(text, api_name=None, use_proxy=None, target_lang=None):
             lang = target_lang or api_config.get("target_lang", "zh-Hans")
             lang_name = LANG_MAP.get(lang, "Simplified Chinese (简体中文)")
             
+            if lang == "zh-Hans":
+                script_note = "Use Simplified Chinese (简体字)."
+            elif lang == "zh-Hant":
+                script_note = "Use Traditional Chinese (繁體字)."
+            else:
+                script_note = ""
+            
             payload = {
                 "model": model_name,
                 "messages": [
-                    {"role": "system", "content": f"You are a professional translator. Translate the following Japanese text to {lang_name}. Only return the translation, no explanations."},
+                    {"role": "system", "content": f"You are a translator. Translate Japanese to {lang_name}. {script_note} Only output the translation."},
                     {"role": "user", "content": text_for_translate}
                 ],
                 "stream": False
@@ -491,11 +498,15 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"success": True})
         elif self.path == '/api/translate': self.send_json({"translation": translate_with_api(data.get("text", ""), data.get("api", DEFAULT_API), data.get("useProxy"), data.get("targetLang"))})
         elif self.path == '/api/groq/config':
-            api_key = data.get("apiKey") or TRANSLATION_APIS["groq"].get("api_key", "")
+            new_api_key = data.get("apiKey") or ""
             model = data.get("model") or TRANSLATION_APIS["groq"].get("model", DEFAULT_MODEL)
             target_lang = data.get("targetLang") or TRANSLATION_APIS["groq"].get("target_lang", "zh-Hans")
             language = data.get("language") or TRANSLATION_APIS["groq"].get("language", "en")
-            save_groq_config(api_key, model, target_lang, language)
+            # 保留原有的 API key
+            if not new_api_key or new_api_key == "(saved)":
+                existing = TRANSLATION_APIS["groq"].get("api_key", "")
+                new_api_key = existing
+            save_groq_config(new_api_key, model, target_lang, language)
             self.send_json({"success": True})
         elif self.path == '/api/proxy/config': config.use_proxy = data.get("enabled", False); self.send_json({"success": True, "enabled": config.use_proxy})
         else: self.send_error(404)

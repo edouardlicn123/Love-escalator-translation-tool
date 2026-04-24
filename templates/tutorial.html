@@ -35,12 +35,54 @@
         .feature-item h5 { margin: 0 0 8px 0; color: #2e7d32; }
         .feature-item p { margin: 0; color: #555; font-size: 14px; }
     </style>
+    <script>
+        const params = new URLSearchParams(window.location.search);
+        let currentLang = params.get('lang') || 'zh';
+        
+        const i18n = {
+            en: {
+                back_link: "← Back to Main",
+                tutorial_title: "Translation Quality Check Tool - Tutorial",
+                section1_title: "I. Groq API Advantages",
+                section2_title: "II. Get Groq API Key",
+                section3_title: "III. Test API",
+                section4_title: "IV. Use Check Feature",
+                section5_title: "V. FAQ"
+            },
+            zh: {
+                back_link: "← 返回主页面",
+                tutorial_title: "翻译质量检查工具 - 教程",
+                section1_title: "一、Groq API 优势",
+                section2_title: "二、获取 Groq API Key",
+                section3_title: "三、测试 API",
+                section4_title: "四、使用检查功能",
+                section5_title: "五、常见问题"
+            }
+        };
+        
+        function t(key) {
+            return i18n[currentLang]?.[key] || i18n['en']?.[key] || key;
+        }
+        
+        function applyI18n() {
+            document.querySelector('.back-link').textContent = t('back_link');
+            document.querySelector('h1').textContent = t('tutorial_title');
+            const sections = document.querySelectorAll('h2');
+            if (sections[0]) sections[0].textContent = t('section1_title');
+            if (sections[1]) sections[1].textContent = t('section2_title');
+            if (sections[2]) sections[2].textContent = t('section3_title');
+            if (sections[3]) sections[3].textContent = t('section4_title');
+            if (sections[4]) sections[4].textContent = t('section5_title');
+        }
+        
+        window.onload = applyI18n;
+    </script>
 </head>
 <body>
     <div class="container">
-        <a href="/" class="back-link">← 返回主页面</a>
+        <a href="/" class="back-link">← Back to Main</a>
         
-        <h1>📖 翻译质量检查工具 - 教程</h1>
+        <h1>📖 Translation Quality Check Tool - Tutorial</h1>
         
         <div class="section">
             <h2>目录</h2>
