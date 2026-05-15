@@ -250,6 +250,8 @@
             return i18n[currentLang]?.[key] || i18n['en']?.[key] || key;
         }
 
+        let aiLoadTimer = null;
+
         const state = {
             currentIdx: 0,
             issues: [],
@@ -301,19 +303,27 @@
         
         async function init() {
             try {
-                const resp = await fetch('/api/groq/status');
-                const data = await resp.json();
-                currentLang = data.language || 'en';
+                const [groqResp, dbResp] = await Promise.all([
+                    fetch('/api/groq/status'),
+                    fetch('/api/db/stats')
+                ]);
+                const groqData = await groqResp.json();
+                currentLang = groqData.language || 'en';
                 state.language = currentLang;
-                state.targetLang = data.target_lang || 'zh-Hans';
+                state.targetLang = groqData.target_lang || 'zh-Hans';
+                state.savedApiKey = groqData.has_key ? '(已有)' : null;
+                applyI18n();
+
+                const dbData = await dbResp.json();
+                document.getElementById('db-status').innerHTML = renderDbStatusHtml(dbData);
+
+                await loadIssues();
             } catch (e) {
                 currentLang = 'en';
                 state.targetLang = 'zh-Hans';
+                applyI18n();
+                console.error('init error:', e);
             }
-            applyI18n();
-            await loadDbStatus();
-            await loadSettings();
-            await loadIssues();
         }
 
         function applyI18n() {
@@ -465,17 +475,19 @@
             }
         }
         
+        function renderDbStatusHtml(data) {
+            if (data.exists) {
+                const unfixed = data.total - data.fixed;
+                return `<span class="stat">${t('total')}: <span class="stat-num">${data.total}</span></span><span class="stat">${t('translated')}: <span class="stat-num">${data.translated}</span></span><span class="stat">${t('confirmed')}: <span class="stat-num">${data.fixed}</span></span><span class="stat">${t('pending')}: <span class="stat-num">${unfixed}</span></span>`;
+            }
+            return `<span class="stat">DB: ${t('no_data')}</span>`;
+        }
+
         async function loadDbStatus() {
             try {
                 const resp = await fetch('/api/db/stats');
                 const data = await resp.json();
-                const el = document.getElementById('db-status');
-                if (data.exists) {
-                    const unfixed = data.total - data.fixed;
-                    el.innerHTML = `<span class="stat">${t('total')}: <span class="stat-num">${data.total}</span></span><span class="stat">${t('translated')}: <span class="stat-num">${data.translated}</span></span><span class="stat">${t('confirmed')}: <span class="stat-num">${data.fixed}</span></span><span class="stat">${t('pending')}: <span class="stat-num">${unfixed}</span></span>`;
-                } else {
-                    el.innerHTML = `<span class="stat">DB: ${t('no_data')}</span>`;
-                }
+                document.getElementById('db-status').innerHTML = renderDbStatusHtml(data);
             } catch (e) {
                 console.error('DB status error:', e);
             }
@@ -606,7 +618,8 @@
                     </div>
                 </div>
 `;
-            loadAISuggestion(s.currentJpText);
+            if (aiLoadTimer) clearTimeout(aiLoadTimer);
+            aiLoadTimer = setTimeout(() => loadAISuggestion(s.currentJpText), 300);
             updateCharCount();
         }
         

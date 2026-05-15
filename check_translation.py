@@ -360,18 +360,19 @@ class Handler(BaseHTTPRequestHandler):
                 return
             with sqlite3.connect(config.db_file) as conn:
                 cur = conn.cursor()
+                limit = 200
                 if show_fixed == '1':
                     sql = "SELECT id, file_key, index_id, jp, cn, is_fixed FROM translation_status"
                     if filter_long_cn == '1':
                         sql += " WHERE LENGTH(cn) > LENGTH(jp)"
-                    sql += " ORDER BY id"
-                    rows = cur.execute(sql).fetchall()
+                    sql += " ORDER BY id LIMIT ?"
+                    rows = cur.execute(sql, (limit,)).fetchall()
                 else:
                     sql = "SELECT id, file_key, index_id, jp, cn, is_fixed FROM translation_status WHERE is_fixed=0"
                     if filter_long_cn == '1':
                         sql += " AND LENGTH(cn) > LENGTH(jp)"
-                    sql += " ORDER BY id"
-                    rows = cur.execute(sql).fetchall()
+                    sql += " ORDER BY id LIMIT ?"
+                    rows = cur.execute(sql, (limit,)).fetchall()
                 results = [{"id": r[0], "file": r[1], "index": r[2], "item": {"jp": r[3], "cn": r[4]}, "is_fixed": r[5]} for r in rows]
             response_data = {"total": len(results), "items": results}
             cache[cache_key] = {"data": response_data, "ts": now}
