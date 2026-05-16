@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json, os, re, sys, sqlite3, datetime, shutil, logging, urllib.parse, time
+import json, os, re, sys, sqlite3, datetime, shutil, logging, urllib.parse, time, threading
 import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from dataclasses import dataclass, field
@@ -31,7 +31,7 @@ config = AppConfig()
 all_items = []
 
 cache = {}
-CACHE_TTL = 10  # seconds
+CACHE_TTL = 30  # seconds
 
 # Translation API Configuration
 DEFAULT_API = "groq"
@@ -142,6 +142,79 @@ def sync_db():
                     inserted += 1
         conn.commit()
     return {"inserted": inserted, "updated": updated}
+
+table_json_lock = threading.Lock()
+
+def atomic_write_table_json(table_data):
+    tmp = config.data_file + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(table_data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, config.data_file)
+
+def validate_or_repair_table():
+    try:
+        with open(config.data_file, 'r', encoding='utf-8') as f:
+            json.load(f)
+        return True
+    except Exception as e:
+        logger.warning(f"table.json corrupted: {e}")
+        tmp = config.data_file + '.tmp'
+        if os.path.exists(tmp):
+            try:
+                json.load(open(tmp, encoding='utf-8'))
+                os.replace(tmp, config.data_file)
+                logger.info("table.json restored from .tmp backup")
+                return True
+            except Exception:
+                pass
+        logger.error("table.json is corrupted and no valid backup found. Restore from other project's copy.")
+        return False
+
+def write_table_json_async(file_key, idx, new_cn):
+    def _write():
+        try:
+            with table_json_lock:
+                with open(config.data_file, 'r', encoding='utf-8') as f:
+                    table_data = json.load(f)
+                if file_key in table_data and isinstance(table_data[file_key], list) and idx < len(table_data[file_key]):
+                    table_data[file_key][idx]['cn'] = new_cn
+                    atomic_write_table_json(table_data)
+        except Exception as e:
+            logger.error(f"Async write table.json failed: {e}")
+    threading.Thread(target=_write, daemon=True).start()
+
+def sync_db_to_file():
+    """Sync database CN content to table.json. Returns diff stats."""
+    try:
+        with table_json_lock:
+            with open(config.data_file, 'r', encoding='utf-8') as f:
+                table_data = json.load(f)
+            with sqlite3.connect(config.db_file) as conn:
+                cur = conn.cursor()
+                total = 0
+                updated = 0
+                consistent = 0
+                missing = 0
+                for file_key, items in table_data.items():
+                    if not isinstance(items, list): continue
+                    for idx, item in enumerate(items):
+                        total += 1
+                        row = cur.execute("SELECT cn FROM translation_status WHERE file_key=? AND index_id=?", (file_key, idx)).fetchone()
+                        if row is None:
+                            missing += 1
+                            continue
+                        db_cn = row[0] or ""
+                        file_cn = item.get("cn", "") or ""
+                        if db_cn != file_cn:
+                            items[idx]['cn'] = db_cn
+                            updated += 1
+                        else:
+                            consistent += 1
+            atomic_write_table_json(table_data)
+        return {"success": True, "total": total, "updated": updated, "consistent": consistent, "missing_in_db": missing}
+    except Exception as e:
+        logger.error(f"Sync DB to file failed: {e}")
+        return {"success": False, "error": str(e)}
 
 def backup_db():
     if not os.path.exists(config.db_file): return {"error": "Database not found"}
@@ -277,7 +350,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.end_headers()
-        self.wfile.write(json.dumps(data).encode('utf-8'))
+        try:
+            self.wfile.write(json.dumps(data).encode('utf-8'))
+        except (BrokenPipeError, ConnectionResetError):
+            pass
     
     def do_GET(self):
         if self.path == '/':
@@ -320,6 +396,17 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"error": "Invalid pagination parameters"})
         elif self.path == '/api/models': self.send_json({"models": []})
         elif self.path == '/api/translation-apis': self.send_json({"apis": [{"key": k, "name": v.get("name", k)} for k, v in TRANSLATION_APIS.items()], "default": DEFAULT_API})
+        elif self.path.startswith('/api/item'):
+            try:
+                item_id = int(urllib.parse.parse_qs(self.path.split('?')[1]).get('id', ['0'])[0])
+                with sqlite3.connect(config.db_file) as conn:
+                    row = conn.cursor().execute("SELECT id, file_key, index_id, jp, cn, is_fixed FROM translation_status WHERE id=?", (item_id,)).fetchone()
+                if row:
+                    self.send_json({"id": row[0], "file": row[1], "index": row[2], "item": {"jp": row[3], "cn": row[4]}, "is_fixed": row[5]})
+                else:
+                    self.send_json({"error": "not found"})
+            except (ValueError, KeyError, IndexError):
+                self.send_json({"error": "invalid id"})
         elif self.path == '/api/db/stats': self.send_json(get_db_stats())
         elif self.path == '/api/groq/status':
             api_config = TRANSLATION_APIS.get("groq", {})
@@ -353,29 +440,39 @@ class Handler(BaseHTTPRequestHandler):
             query = urllib.parse.parse_qs(self.path.split('?')[1] if '?' in self.path else '')
             show_fixed = query.get('show_fixed', ['0'])[0]
             filter_long_cn = query.get('filter_long_cn', ['0'])[0]
-            cache_key = f"next:{show_fixed}:{filter_long_cn}"
+            offset = int(query.get('offset', ['0'])[0])
+            limit = 200
+            cache_key = f"next:{show_fixed}:{filter_long_cn}:{offset}"
             now = time.time()
-            if cache_key in cache and now - cache[cache_key]["ts"] < CACHE_TTL:
+            if offset == 0 and cache_key in cache and now - cache[cache_key]["ts"] < CACHE_TTL:
                 self.send_json(cache[cache_key]["data"])
                 return
             with sqlite3.connect(config.db_file) as conn:
                 cur = conn.cursor()
-                limit = 200
                 if show_fixed == '1':
+                    count_sql = "SELECT COUNT(*) FROM translation_status"
                     sql = "SELECT id, file_key, index_id, jp, cn, is_fixed FROM translation_status"
                     if filter_long_cn == '1':
-                        sql += " WHERE LENGTH(cn) > LENGTH(jp)"
-                    sql += " ORDER BY id LIMIT ?"
-                    rows = cur.execute(sql, (limit,)).fetchall()
+                        where = " WHERE LENGTH(cn) > LENGTH(jp)"
+                        count_sql += where
+                        sql += where
+                    sql += " ORDER BY id LIMIT ? OFFSET ?"
+                    total = cur.execute(count_sql).fetchone()[0]
+                    rows = cur.execute(sql, (limit, offset)).fetchall()
                 else:
+                    count_sql = "SELECT COUNT(*) FROM translation_status WHERE is_fixed=0"
                     sql = "SELECT id, file_key, index_id, jp, cn, is_fixed FROM translation_status WHERE is_fixed=0"
                     if filter_long_cn == '1':
-                        sql += " AND LENGTH(cn) > LENGTH(jp)"
-                    sql += " ORDER BY id LIMIT ?"
-                    rows = cur.execute(sql, (limit,)).fetchall()
+                        where = " AND LENGTH(cn) > LENGTH(jp)"
+                        count_sql += where
+                        sql += where
+                    sql += " ORDER BY id LIMIT ? OFFSET ?"
+                    total = cur.execute(count_sql).fetchone()[0]
+                    rows = cur.execute(sql, (limit, offset)).fetchall()
                 results = [{"id": r[0], "file": r[1], "index": r[2], "item": {"jp": r[3], "cn": r[4]}, "is_fixed": r[5]} for r in rows]
-            response_data = {"total": len(results), "items": results}
-            cache[cache_key] = {"data": response_data, "ts": now}
+            response_data = {"total": len(results), "grand_total": total, "offset": offset, "items": results}
+            if offset == 0:
+                cache[cache_key] = {"data": response_data, "ts": now}
             self.send_json(response_data)
         elif self.path.startswith('/api/search?'):
             query = urllib.parse.parse_qs(self.path.split('?')[1])
@@ -419,6 +516,7 @@ class Handler(BaseHTTPRequestHandler):
         
         if self.path == '/api/db/init': self.send_json(sync_db())
         elif self.path == '/api/db/backup': self.send_json(backup_db())
+        elif self.path == '/api/db/sync-to-file': self.send_json(sync_db_to_file())
         elif self.path == '/api/db/sync-jp':
             try:
                 with open(config.data_file, 'r', encoding='utf-8') as f:
@@ -484,16 +582,8 @@ class Handler(BaseHTTPRequestHandler):
                 conn.execute("UPDATE translation_status SET cn=?, is_translated=?, is_fixed=?, updated_at=? WHERE file_key=? AND index_id=?", (new_cn, is_translated, is_fixed, now, file_key, idx))
                 conn.commit()
             
-            # 同时更新 table.json
-            try:
-                with open(config.data_file, 'r', encoding='utf-8') as f:
-                    table_data = json.load(f)
-                if file_key in table_data and isinstance(table_data[file_key], list) and idx < len(table_data[file_key]):
-                    table_data[file_key][idx]['cn'] = new_cn
-                    with open(config.data_file, 'w', encoding='utf-8') as f:
-                        json.dump(table_data, f, ensure_ascii=False, indent=2)
-            except Exception as e:
-                logger.error(f"Update table.json failed: {e}")
+            # 后台异步更新 table.json
+            write_table_json_async(file_key, idx, new_cn)
             
             cache.clear()
             self.send_json({"success": True})
@@ -526,6 +616,9 @@ def run_server(port=None):
 if __name__ == "__main__":
     try:
         load_config()
+        if not validate_or_repair_table():
+            print("table.json is corrupted. Copy from other project or restore backup.", flush=True)
+            sys.exit(1)
         init_db()
         load_groq_config()
         load_all_data()

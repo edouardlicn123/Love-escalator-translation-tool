@@ -36,10 +36,10 @@
         .db-status .stat-num { font-weight: bold; color: #3498db; }
         .main-content { display: flex; gap: 15px; margin-bottom: 20px; }
         .sidebar { width: 180px; flex-shrink: 0; }
-        .list-panel { width: 120px; flex-shrink: 0; height: 500px; overflow-y: auto; background: #fff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .list-panel { width: 280px; flex-shrink: 0; height: 500px; overflow-y: auto; background: #fff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         .list-panel .header { position: sticky; top: 0; background: #f0f0f0; padding: 8px; font-weight: bold; font-size: 12px; display: flex; }
-        .list-panel .col-id { width: 50px; }
-        .list-panel .col-jp { width: 70px; }
+        .list-panel .col-id { width: 70px; }
+        .list-panel .col-jp { width: 210px; }
         .list-panel .row { display: flex; padding: 5px 8px; border-bottom: 1px solid #eee; cursor: pointer; font-size: 12px; }
         .list-panel .row:hover { background: #e8f4fc; }
         .list-panel .row.active { background: #3498db; color: #fff; }
@@ -89,6 +89,7 @@
         <div class="toolbar">
             <button class="btn-sync-jp" onclick="syncJpFromSource()">Sync Original</button>
             <button class="btn-sync-cn" onclick="syncCnFromSource()">Sync Translation</button>
+            <button class="btn-sync-file" onclick="syncToFile()" style="background:#e67e22;">Sync to File</button>
             <a href="/settings.html" class="btn btn-settings">⚙ Settings</a>
             <a href="/tutorial.html?lang=" + state.language target="_blank" class="btn btn-tutorial" style="text-decoration: none;">📖 Tutorial</a>
         </div>
@@ -143,6 +144,7 @@
                 title: "Translation Quality Check Tool",
                 sync_jp: "Sync Original",
                 sync_cn: "Sync Translation",
+                sync_file: "Sync to File",
                 settings: "Settings",
                 tutorial: "Tutorial",
                 note_sync: "Note: Sync extracts content from source file to database. Use after external changes or when database needs re-init.",
@@ -195,6 +197,7 @@
                 title: "翻译质量检查工具",
                 sync_jp: "同步原文",
                 sync_cn: "同步翻译",
+                sync_file: "同步到文件",
                 settings: "设置",
                 tutorial: "查看教程",
                 note_sync: "注意：同步即从原文件里重新提取内容到数据库。此操作适用于外部覆盖源文件后同步，或数据库需要重新初始化时使用。",
@@ -251,6 +254,9 @@
         }
 
         let aiLoadTimer = null;
+        let currentAiController = null;
+        let dbStats = null;
+        let listObserver = null;
 
         const state = {
             currentIdx: 0,
@@ -262,28 +268,16 @@
             currentJpText: '',
             searchResults: [],
             searchIdx: 0,
-            language: 'en'
+            language: 'en',
+            nextOffset: 0,
+            hasMore: false,
+            loadingMore: false,
+            grandTotal: 0
         };
         
         function escapeHtml(str) {
             if (!str) return '';
             return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-        }
-        
-        async function fetchWithTimeout(url, options = {}, timeout = 5000) {
-            const controller = new AbortController();
-            const id = setTimeout(() => controller.abort(), timeout);
-            try {
-                const resp = await fetch(url, {...options, signal: controller.signal});
-                clearTimeout(id);
-                return resp;
-            } catch (e) {
-                clearTimeout(id);
-                if (e.name === 'AbortError') {
-                    throw new Error('请求超时');
-                }
-                throw e;
-            }
         }
         
         function updateCharCount() {
@@ -315,6 +309,7 @@
                 applyI18n();
 
                 const dbData = await dbResp.json();
+                dbStats = dbData;
                 document.getElementById('db-status').innerHTML = renderDbStatusHtml(dbData);
 
                 await loadIssues();
@@ -338,11 +333,12 @@
                 if (el('label-filter')) el('label-filter').textContent = t('filter');
                 if (el('show-fixed')) el('show-fixed').nextSibling.textContent = ' ' + t('show_fixed');
                 if (el('filter-long-cn')) el('filter-long-cn').nextSibling.textContent = ' ' + t('too_long');
-                const btns = document.querySelectorAll('.btn-sync-jp, .btn-sync-cn, .btn-settings, .btn-tutorial');
+                const btns = document.querySelectorAll('.btn-sync-jp, .btn-sync-cn, .btn-sync-file, .btn-settings, .btn-tutorial');
                 if (btns[0]) btns[0].textContent = t('sync_jp');
                 if (btns[1]) btns[1].textContent = t('sync_cn');
-                if (btns[2]) btns[2].textContent = '⚙ ' + t('settings');
-                if (btns[3]) btns[3].textContent = '📖 ' + t('tutorial');
+                if (btns[2]) btns[2].textContent = t('sync_file');
+                if (btns[3]) btns[3].textContent = '⚙ ' + t('settings');
+                if (btns[4]) btns[4].textContent = '📖 ' + t('tutorial');
                 const nb = document.querySelectorAll('.nav button');
                 if (nb[0]) nb[0].textContent = '← ' + t('prev');
                 if (nb[1]) nb[1].textContent = t('next') + ' →';
@@ -356,6 +352,9 @@
                 const resp = await fetch(getFilteredApiPath('/api/next'));
                 const data = await resp.json();
                 state.issues = data.items || [];
+                state.grandTotal = data.grand_total || state.issues.length;
+                state.nextOffset = 200;
+                state.hasMore = state.issues.length < state.grandTotal;
                 state.currentIdx = 0;
                 renderList();
                 if (state.issues.length > 0) {
@@ -364,6 +363,7 @@
                     const msg = state.showAll ? '暂无记录' : '全部翻译已确认完成！';
                     document.getElementById('issues-list').innerHTML = '<p>' + msg + '</p>';
                 }
+                setupListObserver();
             } catch (e) {
                 console.error('加载数据失败:', e);
             }
@@ -371,12 +371,16 @@
         
         function renderList() {
             const listEl = document.getElementById('issue-list');
-            listEl.innerHTML = state.issues.map((issue, idx) => {
+            let html = state.issues.map((issue, idx) => {
                 const jp = issue.item.jp || '';
-                const jpShort = jp.length > 4 ? jp.substring(0, 4) + '...' : jp;
+                const jpShort = jp.length > 15 ? jp.substring(0, 15) + '...' : jp;
                 const active = idx === state.currentIdx ? 'active' : '';
                 return `<div class="row ${active}" onclick="clickListItem(${idx})"><div class="col-id">${String(issue.id).padStart(6, '0')}</div><div class="col-jp">${escapeHtml(jpShort)}</div></div>`;
             }).join('');
+            if (state.hasMore) {
+                html += '<div id="list-sentinel" style="text-align:center;padding:8px;font-size:12px;color:#999;">Scroll for more...</div>';
+            }
+            listEl.innerHTML = html;
             
             setTimeout(() => {
                 const activeRow = listEl.querySelector('.row.active');
@@ -385,7 +389,41 @@
                 }
             }, 100);
         }
-        
+
+        async function loadMoreItems() {
+            if (state.loadingMore || !state.hasMore) return;
+            state.loadingMore = true;
+            try {
+                const path = getFilteredApiPath('/api/next') + (state.showAll || state.filterLongCn ? '&' : '?') + 'offset=' + state.nextOffset;
+                const resp = await fetch(path);
+                const data = await resp.json();
+                const newItems = data.items || [];
+                if (newItems.length > 0) {
+                    state.issues = state.issues.concat(newItems);
+                    state.nextOffset += newItems.length;
+                    state.hasMore = state.issues.length < state.grandTotal;
+                    renderList();
+                } else {
+                    state.hasMore = false;
+                }
+            } catch (e) {
+                console.error('加载更多失败:', e);
+            }
+            state.loadingMore = false;
+        }
+
+        function setupListObserver() {
+            if (listObserver) listObserver.disconnect();
+            const sentinel = document.getElementById('list-sentinel');
+            if (!sentinel) return;
+            listObserver = new IntersectionObserver((entries) => {
+                if (entries[0].isIntersecting) {
+                    loadMoreItems();
+                }
+            }, { root: document.querySelector('.list-panel'), rootMargin: '100px' });
+            listObserver.observe(sentinel);
+        }
+
         function clickListItem(idx) {
             state.currentIdx = idx;
             renderList();
@@ -399,10 +437,14 @@
             
             fetch(getFilteredApiPath('/api/next')).then(r => r.json()).then(data => {
                 state.issues = data.items || [];
+                state.grandTotal = data.grand_total || state.issues.length;
+                state.nextOffset = 200;
+                state.hasMore = state.issues.length < state.grandTotal;
                 const newIdx = currentId ? state.issues.findIndex(i => i.id === currentId) : -1;
                 state.currentIdx = newIdx >= 0 ? newIdx : 0;
                 renderList();
                 renderItem();
+                setTimeout(setupListObserver, 100);
             }).catch(e => console.error('过滤失败:', e));
         }
         
@@ -487,6 +529,7 @@
             try {
                 const resp = await fetch('/api/db/stats');
                 const data = await resp.json();
+                dbStats = data;
                 document.getElementById('db-status').innerHTML = renderDbStatusHtml(data);
             } catch (e) {
                 console.error('DB status error:', e);
@@ -573,7 +616,30 @@
             }
         }
         
-        function renderItem() {
+        async function syncToFile() {
+            const btn = document.querySelector('button[onclick="syncToFile()"]');
+            const origText = btn.textContent;
+            btn.textContent = '...';
+            btn.disabled = true;
+            try {
+                const resp = await fetch('/api/db/sync-to-file', {method: 'POST'});
+                const data = await resp.json();
+                btn.textContent = origText;
+                btn.disabled = false;
+                if (data.success) {
+                    alert(`Sync complete!\nTotal: ${data.total}\nUpdated: ${data.updated}\nConsistent: ${data.consistent}`);
+                } else {
+                    alert('Sync failed: ' + (data.error || 'unknown error'));
+                }
+            } catch (e) {
+                btn.textContent = origText;
+                btn.disabled = false;
+                console.error('Sync to file error:', e);
+                alert('Sync failed: ' + e.message);
+            }
+        }
+        
+        function renderItem(skipAi) {
             const s = state;
             if (s.issues.length === 0) {
                 const msg = s.showAll ? t('no_records') : t('all_done');
@@ -619,7 +685,10 @@
                 </div>
 `;
             if (aiLoadTimer) clearTimeout(aiLoadTimer);
-            aiLoadTimer = setTimeout(() => loadAISuggestion(s.currentJpText), 300);
+            if (currentAiController) currentAiController.abort();
+            if (!skipAi) {
+                aiLoadTimer = setTimeout(() => loadAISuggestion(s.currentJpText), 300);
+            }
             updateCharCount();
         }
         
@@ -632,14 +701,18 @@
                 document.getElementById('ai-suggestion').textContent = t('no_original');
                 return;
             }
+            if (currentAiController) currentAiController.abort();
+            currentAiController = new AbortController();
+            const signal = currentAiController.signal;
             const loadingEl = document.getElementById('ai-loading');
             const suggestionEl = document.getElementById('ai-suggestion');
             loadingEl.textContent = t('loading');
             try {
-                const resp = await fetchWithTimeout('/api/translate', {
+                const resp = await fetch('/api/translate', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({text: text, useProxy: state.useProxy, targetLang: state.targetLang})
+                    body: JSON.stringify({text: text, useProxy: state.useProxy, targetLang: state.targetLang}),
+                    signal
                 });
                 const data = await resp.json();
                 if (data.translation) {
@@ -650,6 +723,7 @@
                     suggestionEl.classList.add('error');
                 }
             } catch (e) {
+                if (e.name === 'AbortError') return;
                 suggestionEl.textContent = t('translate_failed') + ' ' + e.message;
                 suggestionEl.classList.add('error');
                 console.error('Translation error:', e);
@@ -691,7 +765,10 @@
             const data = await resp.json();
 
             if (data.success) {
-                await loadDbStatus();
+                if (dbStats) {
+                    dbStats.fixed++;
+                    document.getElementById('db-status').innerHTML = renderDbStatusHtml(dbStats);
+                }
 
                 if (s.currentIdx < s.issues.length) {
                     s.issues[s.currentIdx].item.cn = cn || '';
@@ -737,19 +814,29 @@
             }
         }
         
-        function jumpToItem() {
+        async function jumpToItem() {
             const input = document.getElementById('jump-input');
             const targetId = parseInt(input.value);
-            if (!targetId || targetId < 1) { alert('请输入有效的ID'); return; }
-            if (state.issues.length === 0) { alert('当前没有数据'); return; }
+            if (!targetId || targetId < 1) { alert(t('invalid_id')); return; }
             
             const targetIdx = state.issues.findIndex(i => i.id === targetId);
             if (targetIdx >= 0) {
                 state.currentIdx = targetIdx;
                 renderList();
                 renderItem();
-            } else {
-                alert('在当前过滤范围内未找到ID: ' + targetId);
+                return;
+            }
+            
+            try {
+                const resp = await fetch('/api/item?id=' + targetId);
+                const data = await resp.json();
+                if (data.error) { alert(t('no_match')); return; }
+                state.issues = [data];
+                state.currentIdx = 0;
+                renderList();
+                renderItem();
+            } catch (e) {
+                alert(t('no_match'));
             }
         }
         
