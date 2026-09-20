@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyopencode"
+version = "0.1.0"
+description = "Python toolkit for asking questions to opencode from scripts and CLIs"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+
+[project.scripts]
+pyopencode = "pyopencode.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["pyopencode*"]

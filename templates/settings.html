@@ -50,6 +50,22 @@
         </div>
 
         <div class="settings">
+            <h3 id="label-translation">Translation Settings</h3>
+            <div class="config-row">
+                <label id="label-backend">Backend:</label>
+                <select id="backend-select" onchange="onBackendChange(this.value)" style="width:200px;">
+                    <option value="groq" id="opt-backend-groq">Groq API（直连）</option>
+                    <option value="opencode" id="opt-backend-opencode">opencode 智能体</option>
+                </select>
+                <span id="backend-hint" style="font-size:12px;color:#666;"></span>
+            </div>
+            <div class="config-row" id="opencode-row">
+                <label id="label-opencode-model">opencode 模型:</label>
+                <select id="opencode-model" style="width:200px;"></select>
+            </div>
+        </div>
+
+        <div class="settings">
             <h3 id="label-groq">Groq API Config</h3>
             <div class="config-row">
                 <label id="label-api-key">API Key:</label>
@@ -102,6 +118,13 @@
                 system_title: "System Title:",
                 system_title_placeholder: "Love escalator Translation Tool",
                 save_btn: "Save",
+                translation_settings: "Translation Settings",
+                backend: "Backend:",
+                backend_groq: "Groq API (direct)",
+                backend_opencode: "opencode agent",
+                opencode_model: "opencode Model:",
+                backend_hint_groq: "direct Groq API call (fast)",
+                backend_hint_opencode: "pyopencode → opencode, with project context (slower)",
                 api_config: "Groq API Config",
                 api_key: "API Key:",
                 api_key_placeholder: "gsk_xxxxxxxxxxxx",
@@ -129,6 +152,13 @@
                 system_title: "系统标题:",
                 system_title_placeholder: "Love escalator 翻译质量检查工具",
                 save_btn: "保存",
+                translation_settings: "翻译设置",
+                backend: "翻译方式:",
+                backend_groq: "Groq API（直连）",
+                backend_opencode: "opencode 智能体",
+                opencode_model: "opencode 模型:",
+                backend_hint_groq: "直接调用 Groq API（快速）",
+                backend_hint_opencode: "经 opencode 智能体，带项目上下文（较慢）",
                 api_config: "Groq API 配置",
                 api_key: "API Key:",
                 api_key_placeholder: "gsk_xxxxxxxxxxxx",
@@ -170,6 +200,11 @@
                 if (el('page-title')) el('page-title').textContent = t('settings');
                 if (el('label-lang')) el('label-lang').textContent = t('language') + ':';
                 if (el('label-sys-title')) el('label-sys-title').textContent = t('system_title');
+                if (el('label-translation')) el('label-translation').textContent = t('translation_settings');
+                if (el('label-backend')) el('label-backend').textContent = t('backend');
+                if (el('opt-backend-groq')) el('opt-backend-groq').textContent = t('backend_groq');
+                if (el('opt-backend-opencode')) el('opt-backend-opencode').textContent = t('backend_opencode');
+                if (el('label-opencode-model')) el('label-opencode-model').textContent = t('opencode_model');
                 if (el('label-groq')) el('label-groq').textContent = t('api_config');
                 if (el('label-api-key')) el('label-api-key').textContent = t('api_key');
                 if (el('label-model')) el('label-model').textContent = t('model');
@@ -177,6 +212,7 @@
                 if (el('label-proxy-cb')) el('label-proxy-cb').textContent = t('proxy_use');
                 if (el('label-target-lang')) el('label-target-lang').textContent = t('target_lang');
                 if (el('btn-save')) el('btn-save').textContent = t('saved');
+                onBackendChange((el('backend-select') || {}).value || 'groq');
             } catch(e) {
                 console.error('i18n error:', e);
             }
@@ -249,15 +285,53 @@
             }
         }
         
+        function populateModelSelect(selectId, models, selectedId) {
+            const sel = document.getElementById(selectId);
+            if (!sel) return;
+            sel.innerHTML = '';
+            const list = Array.isArray(models) ? models : [];
+            let hasSelected = false;
+            list.forEach(m => {
+                if (!m || !m.id) return;
+                const opt = document.createElement('option');
+                opt.value = m.id;
+                opt.textContent = m.name || m.id;
+                if (m.id === selectedId) { opt.selected = true; hasSelected = true; }
+                sel.appendChild(opt);
+            });
+            // 当前模型不在清单中（如旧配置）时，保留为一个选项
+            if (selectedId && !hasSelected) {
+                const opt = document.createElement('option');
+                opt.value = selectedId;
+                opt.textContent = selectedId + ' (current)';
+                opt.selected = true;
+                sel.appendChild(opt);
+            }
+            if (!sel.value && sel.options.length) sel.selectedIndex = 0;
+        }
+
+        function onBackendChange(value) {
+            const isOpencode = value === 'opencode';
+            const opencodeRow = document.getElementById('opencode-row');
+            if (opencodeRow) opencodeRow.style.display = isOpencode ? '' : 'none';
+            const hintEl = document.getElementById('backend-hint');
+            if (hintEl) hintEl.textContent = isOpencode ? t('backend_hint_opencode') : t('backend_hint_groq');
+        }
+
         async function loadSettings() {
             const resp = await fetch('/api/groq/status');
             const data = await resp.json();
-            if (data.model) {
-                document.getElementById('groq-model').value = data.model;
-            }
             if (data.target_lang) {
                 document.getElementById('target-lang').value = data.target_lang;
             }
+            if (data.backend) {
+                document.getElementById('backend-select').value = data.backend;
+            }
+            // 模型下拉菜单从服务器清单填充
+            const models = data.models || {};
+            populateModelSelect('groq-model', models.groq, data.model);
+            populateModelSelect('opencode-model', models.opencode, data.opencode_model);
+            onBackendChange(data.backend || 'groq');
         }
         
         async function checkGroqStatus() {
@@ -299,6 +373,8 @@
             const model = document.getElementById('groq-model').value;
             const targetLang = document.getElementById('target-lang').value;
             const useProxy = document.getElementById('use-proxy').checked;
+            const backend = document.getElementById('backend-select').value;
+            const opencodeModel = document.getElementById('opencode-model').value;
             let apiKey = apiKeyInput.value;
             if (!apiKey && savedApiKey) {
                 apiKey = savedApiKey;
@@ -314,6 +390,12 @@
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({enabled: useProxy})
+            });
+            
+            const backendResp = await fetch('/api/backend/config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({backend, opencodeModel})
             });
             
             if (result.success) {

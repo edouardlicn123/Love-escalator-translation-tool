@@ -8,6 +8,39 @@ from typing import Dict, Any
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# ── pyopencode (opencode 智能体) 支持 ──────────────────────────────
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_PYOPENCODE_DIR = os.path.join(_SCRIPT_DIR, "pyopencode")
+if os.path.isdir(_PYOPENCODE_DIR) and _PYOPENCODE_DIR not in sys.path:
+    sys.path.insert(0, _PYOPENCODE_DIR)
+try:
+    from pyopencode import ask as _pyopencode_ask
+    from pyopencode import OpenCodeError as _PyOpenCodeError
+    PYOPENCODE_AVAILABLE = True
+except Exception:
+    _pyopencode_ask = None
+    _PyOpenCodeError = Exception
+    PYOPENCODE_AVAILABLE = False
+
+# 翻译后端: groq = 直连 Groq API / opencode = opencode 智能体调用
+TRANSLATION_BACKEND = "groq"
+OPENCODE_MODEL = "groq/openai/gpt-oss-120b"
+
+# 各后端可选模型（用于设置页下拉菜单）
+AVAILABLE_MODELS = {
+    "groq": [
+        {"id": "qwen/qwen3.8-27b", "name": "Qwen 3.8 27B（推荐）"},
+        {"id": "openai/gpt-oss-20b", "name": "GPT-OSS 20B（快）"},
+        {"id": "openai/gpt-oss-120b", "name": "GPT-OSS 120B（强）"},
+        {"id": "groq/compound", "name": "Groq Compound"},
+        {"id": "groq/compound-mini", "name": "Groq Compound Mini"},
+    ],
+    "opencode": [
+        {"id": "groq/openai/gpt-oss-120b", "name": "Groq GPT-OSS 120B（推荐）"},
+        {"id": "groq/openai/gpt-oss-20b", "name": "Groq GPT-OSS 20B（可能超上下文）"},
+    ],
+}
+
 @dataclass
 class AppConfig:
     proxy_host: str = "127.0.0.1"
@@ -35,7 +68,7 @@ CACHE_TTL = 30  # seconds
 
 # Translation API Configuration
 DEFAULT_API = "groq"
-DEFAULT_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_MODEL = "qwen/qwen3.8-27b"
 
 LANG_MAP = {
     "en": "English",
@@ -61,9 +94,17 @@ TRANSLATION_APIS = {
 def init_db():
     with sqlite3.connect(config.db_file) as conn:
         conn.execute('''CREATE TABLE IF NOT EXISTS translation_status (id INTEGER PRIMARY KEY, file_key TEXT, index_id INTEGER, jp TEXT, cn TEXT, is_translated INTEGER DEFAULT 0, is_fixed INTEGER DEFAULT 0, issue_type TEXT, ai_suggestion TEXT, created_at TEXT, updated_at TEXT, UNIQUE(file_key, index_id))''')
-        conn.execute('''CREATE TABLE IF NOT EXISTS groq_config (id INTEGER PRIMARY KEY CHECK (id=1), api_key TEXT, model TEXT DEFAULT 'llama-3.3-70b-versatile', target_lang TEXT DEFAULT 'zh-Hans', language TEXT DEFAULT 'en', updated_at TEXT)''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS groq_config (id INTEGER PRIMARY KEY CHECK (id=1), api_key TEXT, model TEXT DEFAULT 'qwen/qwen3.8-27b', target_lang TEXT DEFAULT 'zh-Hans', language TEXT DEFAULT 'en', updated_at TEXT)''')
         try:
             conn.execute("ALTER TABLE groq_config ADD COLUMN language TEXT DEFAULT 'en'")
+        except:
+            pass
+        try:
+            conn.execute("ALTER TABLE groq_config ADD COLUMN backend TEXT DEFAULT 'groq'")
+        except:
+            pass
+        try:
+            conn.execute("ALTER TABLE groq_config ADD COLUMN opencode_model TEXT DEFAULT 'groq/openai/gpt-oss-120b'")
         except:
             pass
         conn.execute("CREATE INDEX IF NOT EXISTS idx_is_fixed ON translation_status(is_fixed)")
@@ -72,28 +113,37 @@ def init_db():
         conn.commit()
 
 def load_groq_config():
+    global TRANSLATION_BACKEND, OPENCODE_MODEL
     if not config.db_file or not os.path.exists(config.db_file): return
     try:
         with sqlite3.connect(config.db_file) as conn:
-            row = conn.cursor().execute("SELECT api_key, model, target_lang, language FROM groq_config WHERE id=1").fetchone()
+            row = conn.cursor().execute("SELECT api_key, model, target_lang, language, backend, opencode_model FROM groq_config WHERE id=1").fetchone()
             if row:
                 TRANSLATION_APIS["groq"]["api_key"] = row[0] or ""
                 TRANSLATION_APIS["groq"]["model"] = row[1] or DEFAULT_MODEL
                 TRANSLATION_APIS["groq"]["target_lang"] = row[2] if len(row) > 2 else "zh-Hans"
                 TRANSLATION_APIS["groq"]["language"] = row[3] if len(row) > 3 and row[3] else "en"
+                TRANSLATION_BACKEND = row[4] if len(row) > 4 and row[4] else "groq"
+                OPENCODE_MODEL = row[5] if len(row) > 5 and row[5] else "groq/openai/gpt-oss-120b"
     except Exception:
         pass
 
 def save_groq_config(api_key, model, target_lang="zh-Hans", language="en"):
+    global TRANSLATION_BACKEND, OPENCODE_MODEL
     language = language or "en"
     system_title = config.system_title or "Translation Quality Check Tool"
     with sqlite3.connect(config.db_file) as conn:
-        conn.execute("INSERT OR REPLACE INTO groq_config VALUES(?,?,?,?,?,?,?)", (1, api_key, model, target_lang, datetime.datetime.now().isoformat(), system_title, language))
+        existing = conn.cursor().execute("SELECT backend, opencode_model FROM groq_config WHERE id=1").fetchone()
+        backend = existing[0] if existing and existing[0] else "groq"
+        opencode_model = existing[1] if existing and existing[1] else "groq/openai/gpt-oss-120b"
+        conn.execute("INSERT OR REPLACE INTO groq_config VALUES(?,?,?,?,?,?,?,?,?)", (1, api_key, model, target_lang, datetime.datetime.now().isoformat(), system_title, language, backend, opencode_model))
         conn.commit()
     TRANSLATION_APIS["groq"]["api_key"] = api_key
     TRANSLATION_APIS["groq"]["model"] = model
     TRANSLATION_APIS["groq"]["target_lang"] = target_lang
     TRANSLATION_APIS["groq"]["language"] = language
+    TRANSLATION_BACKEND = backend
+    OPENCODE_MODEL = opencode_model
 
 def load_config():
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -133,12 +183,12 @@ def sync_db():
             for idx, item in enumerate(items):
                 jp, cn = item.get("jp", ""), item.get("cn", "")
                 is_translated = 1 if cn and cn.strip() else 0
-                is_fixed = 0
                 if row := cur.execute("SELECT is_fixed FROM translation_status WHERE file_key=? AND index_id=?", (file_key, idx)).fetchone():
-                    cur.execute("UPDATE translation_status SET jp=?, cn=?, is_translated=?, is_fixed=? WHERE file_key=? AND index_id=?", (jp, cn, is_translated, is_fixed, file_key, idx))
+                    existing_fixed = row[0]
+                    cur.execute("UPDATE translation_status SET jp=?, cn=?, is_translated=?, is_fixed=? WHERE file_key=? AND index_id=?", (jp, cn, is_translated, existing_fixed, file_key, idx))
                     updated += 1
                 else:
-                    cur.execute("INSERT INTO translation_status VALUES (?,?,?,?,?,?,?,?,?,?)", (None, file_key, idx, jp, cn, is_translated, is_fixed, "", now, now))
+                    cur.execute("INSERT INTO translation_status VALUES (?,?,?,?,?,?,?,?,?,?)", (None, file_key, idx, jp, cn, is_translated, 0, "", now, now))
                     inserted += 1
         conn.commit()
     return {"inserted": inserted, "updated": updated}
@@ -316,6 +366,33 @@ def translate_with_api(text, api_name=None, use_proxy=None, target_lang=None):
         return "Translation failed: " + str(e)
     return "Translation service unavailable"
 
+def translate_with_opencode(text, target_lang=None):
+    """通过 pyopencode → opencode 智能体获取翻译建议。"""
+    if not text: return None
+    if not PYOPENCODE_AVAILABLE or _pyopencode_ask is None:
+        return "pyopencode 不可用，无法调用 opencode（请检查 pyopencode/pyopencode 目录）"
+    lang = target_lang or TRANSLATION_APIS.get("groq", {}).get("target_lang", "zh-Hans")
+    lang_name = LANG_MAP.get(lang, "Simplified Chinese (简体中文)")
+    question = (
+        f"You are a professional Japanese-to-{lang_name} translator. "
+        f"Translate the following Japanese text into {lang_name}. "
+        "Output ONLY the translation. No explanations, no notes, no code fences, no preamble.\n\n"
+        + text
+    )
+    try:
+        result = _pyopencode_ask(
+            question,
+            model=OPENCODE_MODEL,
+            dir=_SCRIPT_DIR,
+            timeout=120,
+        )
+        translation = (result.text or "").strip()
+        return translation or "opencode returned empty"
+    except _PyOpenCodeError as e:
+        return "opencode 翻译失败: " + str(e)[:200]
+    except Exception as e:
+        return "opencode 翻译异常: " + str(e)[:200]
+
 def load_template():
     try:
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -416,7 +493,11 @@ class Handler(BaseHTTPRequestHandler):
                 "has_key": has_key,
                 "model": api_config.get("model", DEFAULT_MODEL),
                 "target_lang": api_config.get("target_lang", "zh-Hans"),
-                "language": api_config.get("language", "en")
+                "language": api_config.get("language", "en"),
+                "backend": TRANSLATION_BACKEND,
+                "opencode_model": OPENCODE_MODEL,
+                "pyopencode_available": PYOPENCODE_AVAILABLE,
+                "models": AVAILABLE_MODELS
             })
         elif self.path.startswith('/api/language'):
             action = urllib.parse.parse_qs(self.path.split('?')[1] if '?' in self.path else '').get('action', ['get'])[0]
@@ -492,13 +573,14 @@ class Handler(BaseHTTPRequestHandler):
                     params.extend(['%' + keyword + '%', '%' + keyword + '%'])
                 
                 where_sql = ' AND '.join(where_parts) if where_parts else '1=1'
-                sql = f"SELECT id, file_key, index_id, jp, cn FROM translation_status WHERE {where_sql} LIMIT 100"
+                sql = f"SELECT id, file_key, index_id, jp, cn, is_fixed FROM translation_status WHERE {where_sql} LIMIT 100"
                 rows = cur.execute(sql, params).fetchall()
-                results = [{"id": r[0], "file": r[1], "index": r[2], "item": {"jp": r[3], "cn": r[4]}} for r in rows]
+                results = [{"id": r[0], "file": r[1], "index": r[2], "item": {"jp": r[3], "cn": r[4]}, "is_fixed": r[5]} for r in rows]
             self.send_json({"results": results, "total": len(results)})
         else: self.send_error(404)
     
     def do_POST(self):
+        global TRANSLATION_BACKEND, OPENCODE_MODEL
         try:
             length = int(self.headers.get('Content-Length', 0))
         except (ValueError, TypeError):
@@ -587,7 +669,25 @@ class Handler(BaseHTTPRequestHandler):
             
             cache.clear()
             self.send_json({"success": True})
-        elif self.path == '/api/translate': self.send_json({"translation": translate_with_api(data.get("text", ""), data.get("api", DEFAULT_API), data.get("useProxy"), data.get("targetLang"))})
+        elif self.path == '/api/translate':
+            backend = data.get("backend") or TRANSLATION_BACKEND
+            if backend == "opencode":
+                translation = translate_with_opencode(data.get("text", ""), data.get("targetLang"))
+            else:
+                translation = translate_with_api(data.get("text", ""), data.get("api", DEFAULT_API), data.get("useProxy"), data.get("targetLang"))
+            self.send_json({"translation": translation, "backend": backend})
+        elif self.path == '/api/backend/config':
+            new_backend = data.get("backend") or TRANSLATION_BACKEND
+            if new_backend not in ("groq", "opencode"):
+                self.send_json({"error": "无效后端"})
+                return
+            TRANSLATION_BACKEND = new_backend
+            if data.get("opencodeModel"):
+                OPENCODE_MODEL = data.get("opencodeModel")
+            with sqlite3.connect(config.db_file) as conn:
+                conn.execute("UPDATE groq_config SET backend=?, opencode_model=? WHERE id=1", (TRANSLATION_BACKEND, OPENCODE_MODEL))
+                conn.commit()
+            self.send_json({"success": True, "backend": TRANSLATION_BACKEND, "opencode_model": OPENCODE_MODEL})
         elif self.path == '/api/groq/config':
             new_api_key = data.get("apiKey") or ""
             model = data.get("model") or TRANSLATION_APIS["groq"].get("model", DEFAULT_MODEL)

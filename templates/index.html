@@ -91,7 +91,7 @@
             <button class="btn-sync-cn" onclick="syncCnFromSource()">Sync Translation</button>
             <button class="btn-sync-file" onclick="syncToFile()" style="background:#e67e22;">Sync to File</button>
             <a href="/settings.html" class="btn btn-settings">⚙ Settings</a>
-            <a href="/tutorial.html?lang=" + state.language target="_blank" class="btn btn-tutorial" style="text-decoration: none;">📖 Tutorial</a>
+            <a id="tutorial-link" target="_blank" class="btn btn-tutorial" style="text-decoration: none;">📖 Tutorial</a>
         </div>
         <div id="note-sync" style="color:#e74c3c;font-size:12px;margin-bottom:15px;">Note: Sync extracts content from source file to database. Use after external changes or when database needs re-init.</div>
 
@@ -157,6 +157,8 @@
                 original: "Original (JP)",
                 current_cn: "Current Translation (CN)",
                 ai_suggest: "AI Suggestion",
+                backend_groq: "Groq direct",
+                backend_opencode: "opencode agent",
                 refresh: "Refresh",
                 copy: "Copy",
                 editor: "Editor",
@@ -210,6 +212,8 @@
                 original: "原文 (jp):",
                 current_cn: "当前翻译 (cn)",
                 ai_suggest: "AI建议",
+                backend_groq: "Groq 直连",
+                backend_opencode: "opencode 智能体",
                 refresh: "刷新",
                 copy: "复制",
                 editor: "编辑区:",
@@ -263,6 +267,9 @@
             issues: [],
             useProxy: false,
             savedApiKey: null,
+            backend: 'groq',
+            groqModel: '',
+            opencodeModel: '',
             showAll: false,
             filterLongCn: false,
             currentJpText: '',
@@ -306,6 +313,9 @@
                 state.language = currentLang;
                 state.targetLang = groqData.target_lang || 'zh-Hans';
                 state.savedApiKey = groqData.has_key ? '(已有)' : null;
+                state.backend = (groqData.backend === 'opencode') ? 'opencode' : 'groq';
+                state.groqModel = groqData.model || '';
+                state.opencodeModel = groqData.opencode_model || '';
                 applyI18n();
 
                 const dbData = await dbResp.json();
@@ -338,7 +348,11 @@
                 if (btns[1]) btns[1].textContent = t('sync_cn');
                 if (btns[2]) btns[2].textContent = t('sync_file');
                 if (btns[3]) btns[3].textContent = '⚙ ' + t('settings');
-                if (btns[4]) btns[4].textContent = '📖 ' + t('tutorial');
+                const tutorialLink = document.getElementById('tutorial-link');
+                if (tutorialLink) {
+                    tutorialLink.href = '/tutorial.html?lang=' + state.language;
+                    tutorialLink.textContent = '📖 ' + t('tutorial');
+                }
                 const nb = document.querySelectorAll('.nav button');
                 if (nb[0]) nb[0].textContent = '← ' + t('prev');
                 if (nb[1]) nb[1].textContent = t('next') + ' →';
@@ -360,7 +374,7 @@
                 if (state.issues.length > 0) {
                     renderItem();
                 } else {
-                    const msg = state.showAll ? '暂无记录' : '全部翻译已确认完成！';
+                    const msg = state.showAll ? t('no_records') : t('all_done');
                     document.getElementById('issues-list').innerHTML = '<p>' + msg + '</p>';
                 }
                 setupListObserver();
@@ -670,7 +684,7 @@
                         <div class="option-content" id="current-cn">${escapeHtml(currentCn) || t('empty')}</div>
                     </div>
 
-                    <div class="label">${t('option_b')} ${t('ai_suggest')}: <button class="btn-small" onclick="refreshAISuggestion()">🔄${t('refresh')}</button> <button class="btn-small" onclick="copyToEditor('ai')">${copyBtn}</button> <span id="ai-loading" style="font-size:12px;color:#999;"></span></div>
+                    <div class="label">${t('option_b')} ${t('ai_suggest')}: <span id="backend-indicator" style="font-size:12px;color:#888;">${state.backend === 'opencode' ? t('backend_opencode') + ' (' + (state.opencodeModel || '?') + ')' : t('backend_groq') + ' (' + (state.groqModel || '?') + ')'}</span> <button class="btn-small" onclick="refreshAISuggestion()">🔄${t('refresh')}</button> <button class="btn-small" onclick="copyToEditor('ai')">${copyBtn}</button> <span id="ai-loading" style="font-size:12px;color:#999;"></span></div>
                     <div class="option-content" id="ai-suggestion">${t('loading')}</div>
 
                     <div class="label">${t('editor')}</div>
@@ -711,7 +725,7 @@
                 const resp = await fetch('/api/translate', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({text: text, useProxy: state.useProxy, targetLang: state.targetLang}),
+                    body: JSON.stringify({text: text, useProxy: state.useProxy, targetLang: state.targetLang, backend: state.backend}),
                     signal
                 });
                 const data = await resp.json();
@@ -765,7 +779,7 @@
             const data = await resp.json();
 
             if (data.success) {
-                if (dbStats) {
+                if (dbStats && s.issues[s.currentIdx].is_fixed !== 1) {
                     dbStats.fixed++;
                     document.getElementById('db-status').innerHTML = renderDbStatusHtml(dbStats);
                 }
@@ -833,6 +847,8 @@
                 if (data.error) { alert(t('no_match')); return; }
                 state.issues = [data];
                 state.currentIdx = 0;
+                state.hasMore = false;
+                if (listObserver) listObserver.disconnect();
                 renderList();
                 renderItem();
             } catch (e) {
@@ -844,7 +860,7 @@
             const keyword = document.getElementById('search-input').value.trim();
             if (!keyword) return;
             
-            const searchType = state.showAll ? 'all' : 'unfixed';
+            const searchType = document.getElementById('show-fixed').checked ? 'all' : 'unfixed';
             let searchUrl = '/api/search?keyword=' + encodeURIComponent(keyword) + '&type=' + searchType;
             if (state.filterLongCn) searchUrl += '&filter_long_cn=1';
             
@@ -860,6 +876,8 @@
             
             state.issues = state.searchResults;
             state.currentIdx = 0;
+            state.hasMore = false;
+            if (listObserver) listObserver.disconnect();
             renderList();
             renderItem();
         }
